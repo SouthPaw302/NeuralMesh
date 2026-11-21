@@ -1,0 +1,220 @@
+name: NeuralMesh Phase 2.4 - Robustness and Memory
+
+on:
+  push:
+    branches: [phase/2.4-robustness-neural-memory]
+    paths: [.github/workflows/phase24-robustness.yml]
+  pull_request:
+    paths:
+      - neural_mesh/**
+      - tests/**
+      - .github/workflows/phase24-robustness.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase24-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+      - run: python -m unittest discover -s tests -p 'test_*.py' -v
+
+  prepare-training:
+    if: github.event_name != 'pull_request'
+    needs: [tests]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Generate ID training/validation, without moving test labels forward
+        run: |
+          python -m neural_mesh.phase2 prepare --seed 64013 \
+            --train-count 512 --validation-count 128 --test-count 256 --out fixture
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: p24-train-public-${{ github.run_id }}
+          path: |
+            fixture/public.json
+            fixture/weights.json
+            fixture/trainval-labels.json
+            fixture/manifest.json
+          if-no-files-found: error
+          retention-days: 14
+
+  prepare-ood:
+    if: github.event_name != 'pull_request'
+    needs: [tests]
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        seed: [48017, 58129, 68147]
+    name: "Novel motion seed / ${{ matrix.seed }}"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Generate novel physics; separate public and sealed targets
+        env:
+          SEED: ${{ matrix.seed }}
+        run: python -m neural_mesh.phase24 make-ood --seed "$SEED" --count 128 --out ood
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: p24-ood-public-${{ matrix.seed }}-${{ github.run_id }}
+          path: ood/public.json
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: p24-ood-sealed-${{ matrix.seed }}-${{ github.run_id }}
+          path: ood/sealed-targets.json
+          if-no-files-found: error
+          retention-days: 14
+
+  train-memory:
+    needs: [prepare-training]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: p24-train-public-${{ github.run_id }}
+          path: fixture
+      - name: Fit node connections and calibrate fault masking WITHOUT OOD targets
+        run: |
+          mkdir -p durable
+          python -m neural_mesh.phase24 train-memory \
+            --public fixture/public.json --weights fixture/weights.json \
+            --trainval fixture/trainval-labels.json --out durable/checkpoint.json
+          python -m neural_mesh.phase24 verify-memory --memory durable/checkpoint.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: p24-memory-${{ github.run_id }}
+          path: durable/checkpoint.json
+          if-no-files-found: error
+          retention-days: 30
+
+  probe:
+    needs: [train-memory, prepare-ood]
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        seed: [48017, 58129, 68147]
+    name: "Restored memory + fault probe / ${{ matrix.seed }}"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: p24-memory-${{ github.run_id }}
+          path: memory
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: p24-ood-public-${{ matrix.seed }}-${{ github.run_id }}
+          path: ood
+      - name: Restore neural memory and predict under absent/corrupted node signals
+        run: |
+          mkdir -p predictions
+          python -m neural_mesh.phase24 verify-memory --memory memory/checkpoint.json
+          python -m neural_mesh.phase24 probe \
+            --memory memory/checkpoint.json --public ood/public.json \
+            --out predictions/predictions.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: p24-predictions-${{ matrix.seed }}-${{ github.run_id }}
+          path: predictions/predictions.json
+          if-no-files-found: error
+          retention-days: 14
+
+  evaluate:
+    needs: [probe]
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        seed: [48017, 58129, 68147]
+    name: "Sealed fault/OOD evaluation / ${{ matrix.seed }}"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: p24-predictions-${{ matrix.seed }}-${{ github.run_id }}
+          path: input
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: p24-ood-sealed-${{ matrix.seed }}-${{ github.run_id }}
+          path: sealed
+      - name: Score blind predictions; do not change frozen memory
+        env:
+          SEED: ${{ matrix.seed }}
+        run: |
+          mkdir -p scores
+          python -m neural_mesh.phase24 evaluate \
+            --predictions input/predictions.json \
+            --targets sealed/sealed-targets.json --out "scores/seed-$SEED.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: p24-score-${{ matrix.seed }}-${{ github.run_id }}
+          path: scores/
+          if-no-files-found: error
+          retention-days: 30
+
+  aggregate:
+    needs: [evaluate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: p24-score-*-${{ github.run_id }}
+          path: scores
+          merge-multiple: true
+      - name: Require three complete seed reports from one memory snapshot
+        run: |
+          mkdir -p evidence
+          python -m neural_mesh.phase24 aggregate \
+            --results scores --seeds 48017,58129,68147 \
+            --out evidence/summary.json
+          cp scores/seed-*.json evidence/
+          {
+            echo "### Phase 2.4: novel dynamics, failed nodes, snapshot restore"
+            echo "Three independent OOD seeds, 128 examples per seed, three fault states."
+            echo "Restored model memory in separate GitHub runners. Cross-workflow run restore is a separate proof."
+            echo "All data are synthetic. Compare per-regime harms; CI success is not model quality."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: p24-evidence-${{ github.run_id }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 30
