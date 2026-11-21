@@ -1,0 +1,350 @@
+name: NeuralMesh 20 Local Learners - Sparse Cooperation
+
+on:
+  push:
+    branches: [feat/sparse20-local-learning]
+    paths:
+      - .github/workflows/sparse20-learning.yml
+  pull_request:
+    paths:
+      - neural_mesh/sparse20.py
+      - tests/test_sparse20.py
+      - .github/workflows/sparse20-learning.yml
+  workflow_dispatch:
+    inputs:
+      seed:
+        type: string
+        description: New local-learning stream seed
+        default: '810247'
+        required: false
+      parent_run_id:
+        type: string
+        description: Previous accepted/candidate run ID to restore 20-node checkpoint (optional)
+        default: ''
+        required: false
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: sparse20-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Local learning and integrity tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+      - name: Run entire offline test suite
+        run: |
+          python -m unittest discover -s tests -p 'test_*.py' -v
+          python -m neural_mesh.sparse20 prepare --help
+          python -m neural_mesh.sparse20 first --help
+          python -m neural_mesh.sparse20 second --help
+
+  prepare:
+    if: github.event_name != 'pull_request'
+    needs: [tests]
+    name: Fix stream and restore optional prior persistent state
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Restore parent memory from a previous independent GitHub run
+        if: ${{ inputs.parent_run_id != '' }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sparse20-checkpoint-${{ inputs.parent_run_id }}
+          run-id: ${{ inputs.parent_run_id }}
+          github-token: ${{ github.token }}
+          path: prior
+      - name: Prepare deterministic stage and verify checkpoint lineage
+        env:
+          STREAM_SEED: ${{ inputs.seed || '810247' }}
+        run: |
+          mkdir -p prepared
+          if [ -f prior/checkpoint.json ]; then
+            python -m neural_mesh.sparse20 prepare --seed "$STREAM_SEED" \
+              --parent prior/checkpoint.json --out prepared
+          else
+            python -m neural_mesh.sparse20 prepare --seed "$STREAM_SEED" --out prepared
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sparse20-config-${{ github.run_id }}
+          path: prepared/experiment.json
+          retention-days: 30
+          if-no-files-found: error
+
+  train-wave-1:
+    needs: [prepare]
+    name: "Train 1 / ${{ matrix.node }}"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        node: [position-00, position-01, position-02, position-03, velocity-00, velocity-01, velocity-02, velocity-03, acceleration-00, acceleration-01, acceleration-02, acceleration-03, curvature-00, curvature-01, curvature-02, curvature-03, stabilizer-00, stabilizer-01, stabilizer-02, stabilizer-03]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sparse20-config-${{ github.run_id }}
+          path: config
+      - name: Restore this node's existing parameters, if provided
+        if: ${{ inputs.parent_run_id != '' }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sparse20-checkpoint-${{ inputs.parent_run_id }}
+          run-id: ${{ inputs.parent_run_id }}
+          github-token: ${{ github.token }}
+          path: prior
+      - name: Train this specialist locally, not in a central preparation job
+        env:
+          LOCAL_NODE: ${{ matrix.node }}
+        run: |
+          mkdir -p local
+          if [ -f prior/checkpoint.json ]; then
+            python -m neural_mesh.sparse20 first \
+              --node "$LOCAL_NODE" --config config/experiment.json \
+              --parent prior/checkpoint.json --out "local/node-$LOCAL_NODE.json"
+          else
+            python -m neural_mesh.sparse20 first \
+              --node "$LOCAL_NODE" --config config/experiment.json \
+              --out "local/node-$LOCAL_NODE.json"
+          fi
+          echo "LOCAL TRAINED $LOCAL_NODE on ${RUNNER_NAME}"
+          sleep 45
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sparse20-r1-${{ matrix.node }}-${{ github.run_id }}
+          path: local/
+          retention-days: 30
+          if-no-files-found: error
+
+  sparse-routing:
+    needs: [train-wave-1]
+    name: Build compact five-peer messages per node
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sparse20-config-${{ github.run_id }}
+          path: config
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: sparse20-r1-*-${{ github.run_id }}
+          path: first
+          merge-multiple: true
+      - name: Validate twenty distinct local updates and construct five-peer graph
+        run: |
+          python -m neural_mesh.sparse20 route \
+            --config config/experiment.json --receipts first --out route.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sparse20-route-${{ github.run_id }}
+          path: route.json
+          retention-days: 30
+          if-no-files-found: error
+
+  train-wave-2:
+    needs: [sparse-routing]
+    name: "Train 2 / ${{ matrix.node }}"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        node: [position-00, position-01, position-02, position-03, velocity-00, velocity-01, velocity-02, velocity-03, acceleration-00, acceleration-01, acceleration-02, acceleration-03, curvature-00, curvature-01, curvature-02, curvature-03, stabilizer-00, stabilizer-01, stabilizer-02, stabilizer-03]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sparse20-config-${{ github.run_id }}
+          path: config
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sparse20-r1-${{ matrix.node }}-${{ github.run_id }}
+          path: local
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sparse20-route-${{ github.run_id }}
+          path: peers
+      - name: Locally update paired ablation models with five-peer distillation
+        env:
+          LOCAL_NODE: ${{ matrix.node }}
+        run: |
+          mkdir -p update
+          python -m neural_mesh.sparse20 second \
+            --node "$LOCAL_NODE" --config config/experiment.json \
+            --first "local/node-$LOCAL_NODE.json" \
+            --route peers/route.json --out "update/node-$LOCAL_NODE.json"
+          echo "LOCAL UPDATED $LOCAL_NODE from five peers on ${RUNNER_NAME}"
+          sleep 45
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sparse20-r2-${{ matrix.node }}-${{ github.run_id }}
+          path: update/
+          retention-days: 30
+          if-no-files-found: error
+
+  evaluate:
+    needs: [train-wave-2]
+    name: Independent versus sparse peer learning on three untouched seeds
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sparse20-config-${{ github.run_id }}
+          path: config
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: sparse20-r1-*-${{ github.run_id }}
+          path: first
+          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: sparse20-r2-*-${{ github.run_id }}
+          path: second
+          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sparse20-route-${{ github.run_id }}
+          path: peers
+      - name: Evaluate both strategies identically; emit nonpromoted candidate
+        run: |
+          mkdir -p evidence
+          python -m neural_mesh.sparse20 finish \
+            --config config/experiment.json \
+            --first-receipts first --second-receipts second \
+            --route peers/route.json --out evidence
+          cp peers/route.json evidence/
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sparse20-evidence-${{ github.run_id }}
+          path: evidence/
+          retention-days: 30
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sparse20-checkpoint-${{ github.run_id }}
+          path: evidence/checkpoint.json
+          retention-days: 90
+          if-no-files-found: error
+
+  audit-concurrency:
+    needs: [evaluate]
+    name: Verify twenty physical training jobs overlapped in both waves
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO_NAME: ${{ github.repository }}
+      RUN_ID: ${{ github.run_id }}
+    steps:
+      - name: Verify real runner timestamps, not just matrix configuration
+        run: |
+          mkdir -p proof
+          python - <<'PY'
+          import datetime,json,os,urllib.request
+          url=f'{os.environ["GITHUB_API_URL"]}/repos/{os.environ["REPO_NAME"]}/actions/runs/{os.environ["RUN_ID"]}/jobs?per_page=100'
+          request=urllib.request.Request(url,headers={
+              "Authorization":"Bearer "+os.environ["GH_TOKEN"],
+              "Accept":"application/vnd.github+json"})
+          with urllib.request.urlopen(request,timeout=30) as response:
+              jobs=json.load(response)["jobs"]
+          def peak(prefix):
+              rows=[x for x in jobs if x["name"].startswith(prefix)]
+              if len(rows)!=20 or any(x["conclusion"]!="success" for x in rows):
+                  raise ValueError(f"Expected exactly 20 successful jobs for {prefix}")
+              marks=[]
+              for job in rows:
+                  start=datetime.datetime.fromisoformat(job["started_at"].replace("Z","+00:00"))
+                  end=datetime.datetime.fromisoformat(job["completed_at"].replace("Z","+00:00"))
+                  marks.extend(((start,1),(end,-1)))
+              marks.sort(key=lambda x:(x[0],x[1]))
+              current=maximum=0
+              for _,d in marks:
+                  current+=d
+                  maximum=max(maximum,current)
+              return {"jobs":len(rows),"peak_concurrent":maximum,
+                      "unique_job_ids":len({x["id"] for x in rows})==20}
+          result={"schema":"sparse20-real-runner-audit-v1",
+                  "run_id":int(os.environ["RUN_ID"]),
+                  "first":peak("Train 1 / "),
+                  "second":peak("Train 2 / ")}
+          result["20_simultaneous_confirmed"]=all(
+              result[s]["peak_concurrent"]==20 for s in ("first","second"))
+          with open("proof/concurrency.json","w") as f:
+              json.dump(result,f,sort_keys=True,indent=2)
+          print(json.dumps(result,indent=2))
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sparse20-concurrency-${{ github.run_id }}
+          path: proof/concurrency.json
+          retention-days: 30
+          if-no-files-found: error
+      - name: Require 20 actual overlapping training jobs in both waves
+        run: |
+          python - <<'PY'
+          import json
+          result=json.load(open("proof/concurrency.json"))
+          assert result["20_simultaneous_confirmed"], (
+              "Only partial runner concurrency; the 20-in-parallel objective failed")
+          print("CONFIRMED: 20 real concurrent LOCAL TRAINING jobs in both waves")
+          PY
+
+  scientific-acceptance:
+    needs: [evaluate]
+    name: Scientific gate - peer learning must beat independent learning
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sparse20-evidence-${{ github.run_id }}
+          path: proof
+      - name: No special status for passing CI alone
+        run: |
+          python - <<'PY'
+          from neural_mesh import mesh
+          r=mesh.load("proof/metrics.json")
+          assert r["trained_models_differ"] and r["candidate_only_not_promoted"]
+          assert r["peers_per_node"]==5 and r["node_count"]==20
+          assert r["beat_independent_control"], (
+              "LEARNING_NOT_ACCEPTED: five-peer distillation did not beat "
+              "identically trained independent specialists")
+          parent=r["independent_learning_control"]["per_seed_mse"]
+          child=r["sparse_peer_learning"]["per_seed_mse"]
+          assert sum(child[k]<v for k,v in parent.items())>=2, (
+              "LEARNING_NOT_ACCEPTED: benefits did not replicate on two seeds")
+          print("RESEARCH_QUALIFIED_FOR_HUMAN_REVIEW; no automatic memory promotion")
+          PY
