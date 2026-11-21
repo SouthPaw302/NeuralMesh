@@ -1,0 +1,66 @@
+name: NeuralMesh Sparse20 - Independent Durable Checkpoint Restore Proof
+
+on:
+  push:
+    branches: [feat/sparse20-local-learning]
+    paths: [.github/workflows/sparse20-restore-proof.yml]
+  workflow_dispatch:
+    inputs:
+      parent_run_id:
+        description: Earlier sparse20 run ID containing checkpoint.json
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  verify-persisted-state:
+    name: Restore exactly 20 learned models from an earlier run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Fetch actual serialized checkpoint from a different workflow run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sparse20-checkpoint-${{ inputs.parent_run_id || '44880153349' }}
+          run-id: ${{ inputs.parent_run_id || '44880153349' }}
+          github-token: ${{ github.token }}
+          path: previous
+      - name: Verify fingerprint, population and next-generation continuation
+        run: |
+          python - <<'PY'
+          from neural_mesh import mesh,sparse20
+          checkpoint=mesh.load("previous/checkpoint.json")
+          source=sparse20._restore("previous/checkpoint.json")
+          assert checkpoint["sha256"]==mesh.digest(checkpoint["payload"])
+          assert source["generation"]==1
+          assert len(source["nodes"])==20
+          config=sparse20.prepare(810248,"proof","previous/checkpoint.json")
+          assert config["generation"]==2
+          assert config["parent_sha256"]==checkpoint["sha256"]
+          for node in sparse20.NODES:
+              candidate=sparse20.first(node,config,"previous/checkpoint.json")
+              payload=sparse20._verified(candidate)
+              assert payload["initial_model_sha256"]==mesh.digest(source["nodes"][node])
+              assert payload["trained_model"]!=source["nodes"][node]
+          mesh.save("proof/restoration.json",{
+              "schema":"neuralmesh-durable-state-proof-v1",
+              "prior_checkpoint_sha256":checkpoint["sha256"],
+              "source_generation":1,
+              "restored_generation":2,
+              "previous_models_verified":20,
+              "new_learning_models_verified":20,
+              "previous_state_not_promoted":True})
+          print("VERIFIED: second workflow run loaded all twenty prior learned states")
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sparse20-durable-state-proof-${{ github.run_id }}
+          path: proof/restoration.json
+          retention-days: 30
+          if-no-files-found: error
