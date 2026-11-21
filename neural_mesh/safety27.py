@@ -379,11 +379,11 @@ def evaluate(parent_path,adapter_path,safety_path,decision_path,
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     sub=parser.add_subparsers(dest="command",required=True)
-    train=sub.add_parser("train")
+    traincmd=sub.add_parser("train")
     for n in ("parent","adapter","id-public","id-labels",
               "known-train-public","known-train-labels",
               "known-val-public","known-val-labels","out"):
-        train.add_argument("--"+n,required=True)
+        traincmd.add_argument("--"+n,required=True)
     ev=sub.add_parser("evaluate")
     for n in ("parent","adapter","safety","decision","out"):
         ev.add_argument("--"+n,required=True)
