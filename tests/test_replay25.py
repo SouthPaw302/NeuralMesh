@@ -123,6 +123,48 @@ class ReplayRepairTests(unittest.TestCase):
         state,_=replay25._judgement([],{"validation_pass":False})
         self.assertEqual(state,"BLOCKED_VALIDATION")
 
+    def test_human_promotion_rejects_forged_or_incomplete_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder=Path(tmp)
+            parent=self.memory
+            adjusted=copy.deepcopy(parent["payload"]["phase22_router"]["feedback"]["readout"])
+            adjusted[0][0]+=0.001
+            with patch.object(phase25,"PARENT_SHA",parent["sha256"]):
+                new=phase25._memory(phase25._updated_payload(
+                    parent["payload"],adjusted,parent["sha256"]))
+                decision={"schema":replay25.SCHEMA,"parent_sha256":parent["sha256"],
+                          "candidate_sha256":new["sha256"],
+                          "validation_pass":True,"candidate_is_parent":False}
+                report={"schema":replay25.SCHEMA,"status":"PROMOTION_ELIGIBLE",
+                        "parent_sha256":parent["sha256"],
+                        "candidate_sha256":new["sha256"],
+                        "decision_sha256":mesh.digest(decision),
+                        "summary":{"passes_predeclared_gate":True},
+                        "manual_promotion_required":True,"evaluations":[]}
+                gate={"schema":replay25.SCHEMA,"status":"PROMOTION_ELIGIBLE",
+                      "parent_sha256":parent["sha256"],
+                      "candidate_sha256":new["sha256"],
+                      "evaluation_sha256":mesh.digest(report),
+                      "manual_review_required":True}
+                for name,obj in (("parent.json",parent),("candidate.json",new),
+                                 ("decision.json",decision),("evaluation.json",report),
+                                 ("promotion-gate.json",gate)):
+                    mesh.save(folder/name,obj)
+                with self.assertRaisesRegex(ValueError,"insufficient independent unseen"):
+                    phase25.check_promotion(
+                        folder/"parent.json",folder/"candidate.json",
+                        folder/"decision.json",folder/"evaluation.json",
+                        folder/"promotion-gate.json")
+                # Old Phase 2.5 schema is not a valid substitute for six-set evidence.
+                decision["schema"]=phase25.SCHEMA
+                mesh.save(folder/"decision.json",decision)
+                with self.assertRaisesRegex(ValueError,"legacy single-seed"):
+                    phase25.check_promotion(
+                        folder/"parent.json",folder/"candidate.json",
+                        folder/"decision.json",folder/"evaluation.json",
+                        folder/"promotion-gate.json")
+
+
 
 if __name__=="__main__":
     unittest.main()
