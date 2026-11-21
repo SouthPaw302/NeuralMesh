@@ -229,11 +229,15 @@ def evaluate_candidate(parent_file, candidate_file, decision_file, new_public_fi
         raise ValueError("untrusted training decision or memory lineage")
     if parent["sha256"] != PARENT_SHA:
         raise ValueError("unexpected parent memory")
-    if decision.get("validation_pass") is not True or candidate["sha256"]==parent["sha256"]:
-        raise ValueError("no validation-eligible memory update")
-    payload=candidate["payload"]
-    if payload.get("parent_sha256")!=parent["sha256"] or payload.get("generation")!=2:
-        raise ValueError("candidate lineage invalid")
+    accepted=(decision.get("validation_pass") is True and
+              candidate["sha256"]!=parent["sha256"])
+    if accepted:
+        payload=candidate["payload"]
+        if payload.get("parent_sha256")!=parent["sha256"] or payload.get("generation")!=2:
+            raise ValueError("candidate lineage invalid")
+    elif not (decision.get("validation_pass") is False and
+              candidate["sha256"]==parent["sha256"]):
+        raise ValueError("candidate decision and memory disagree")
     public=mesh.load(new_public_file)
     test=mesh.load(new_test_file)
     phase2._check_schema(public,public.get("config_sha256"))
@@ -251,10 +255,11 @@ def evaluate_candidate(parent_file, candidate_file, decision_file, new_public_fi
     # frozen held-out metrics. No evaluation result flows into training.
     in_ok=_suite_guard(in_dist,0.04,0.15)
     ood_ok=_suite_guard(out_dist,0.07,0.20)
-    status="PROMOTION_ELIGIBLE" if in_ok and ood_ok else "BLOCKED_REGRESSION"
+    status=("BLOCKED_VALIDATION" if not accepted else
+            "PROMOTION_ELIGIBLE" if in_ok and ood_ok else "BLOCKED_REGRESSION")
     report={"schema":SCHEMA,"status":status,"parent_sha256":parent["sha256"],
             "candidate_sha256":candidate["sha256"],"dataset_config":public["config_sha256"],
-            "ood_seed":ood["seed"],"train_validation_pass":True,
+            "ood_seed":ood["seed"],"train_validation_pass":accepted,
             "indistribution_guard_pass":in_ok,"ood_guard_pass":ood_ok,
             "indistribution":in_dist,"ood":out_dist,
             "requires_human_review":True,
