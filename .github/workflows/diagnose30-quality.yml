@@ -76,6 +76,7 @@ jobs:
           {
             echo "### Observable-physics separability diagnostic"
             echo "Only calibration and validation labels accessed; NO sealed test labels."
+            echo "Unscorable noisy-node cases are counted explicitly as abstentions in observability.json."
             echo "Oracle class labels are diagnostic-only and NEVER available at inference."
             echo "Scientific acceptance for the actual candidate is checked separately."
           } >> "$GITHUB_STEP_SUMMARY"
