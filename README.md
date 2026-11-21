@@ -65,6 +65,12 @@ All workers completed, but recurrent feedback **did not improve** this specific 
 - A candidate state checkpoint is produced, never automatically promoted.
 - No external inference API, large model download, real video input, AR scene reconstruction, or production-media write is performed.
 
+## Phase 2.1 — Multi-scenario adaptive routing
+
+The Phase 2.1 implementation adds a **512 training / 128 validation / 256 held-out test** synthetic motion benchmark across four movement regimes. Six GitHub runners predict independently, a separate job learns frozen routing weights from training/validation only, and six second-round workers apply the selected feedback policy. The evaluator measures actual holdout results and paired error intervals.
+
+Read [the experiment protocol](docs/phase-2.1.md) and launch **NeuralMesh Phase 2.1 - Held-out Plasticity Benchmark** from GitHub Actions after review. Its first branch-scoped experiment is recorded in Actions. Existing Phase 1 functionality is retained.
+
 ## Direction
 
 The next experiments should measure multi-scene generalization and train routing weights over held-out examples; then introduce real video-derived features, versioned persistent state, and eventually alternative transport for lower-latency neural communication.
