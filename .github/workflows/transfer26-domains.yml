@@ -1,9 +1,6 @@
 name: NeuralMesh Canonical Learning Experiment
 
 on:
-  push:
-    branches: [stabilize/single-source-of-truth, main]
-    paths: [.github/workflows/transfer26-domains.yml]
   pull_request:
     paths:
       - neural_mesh/**
