@@ -107,6 +107,14 @@ The mesh now combines its frozen six-node forecast with four interpretable physi
 
 The [first nine-seed held-out results](docs/phase-2.6-results.md) improved mean error **1.9% on familiar motion**, **20.4% on newly trained motion families**, and **2.9% on never-trained motion families**. All nine independent test seeds improved in aggregate; **familiar linear motion worsened by 5.5%**, so retention across every capability remains unproven. No model memory was auto-promoted.
 
+## Phase 2.7 — Six-Frame Temporal Observability
+
+The original six-node forecasting model and frozen physics adapter remain unchanged. A new research dataset supplies **six observations** while the original predictor still uses the last four to forecast the same next position.
+
+[Measured results](docs/temporal-observability-results.md): six-frame features improved synthetic motion-family classification from **38.2% to 57.8%** on the same new validation cohort, with linear identification improving from **14.6% to 59.4%**. However, the proposed trust policy **failed no-forgetting validation**; no model was adopted and the independent scientific acceptance job correctly failed. [Protocol](docs/temporal-observability-experiment.md).
+
+This is an information-quality improvement, **not** a demonstrated general-purpose self-improving neural brain.
+
 ## Direction
 
 The next experiments should measure multi-scene generalization and train routing weights over held-out examples; then introduce real video-derived features, versioned persistent state, and eventually alternative transport for lower-latency neural communication.
