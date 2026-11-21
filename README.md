@@ -89,6 +89,12 @@ Phase 2.4 introduces a SHA-256-verified **memory checkpoint** storing trained sp
 
 Three independent GitHub probe runners restore the same frozen checkpoint; sealed target coordinates remain isolated until evaluation. [Phase 2.4 protocol](docs/phase-2.4.md) documents the architecture and limitations. An independent [cross-run recall](https://github.com/SouthPaw302/NeuralMesh/actions/runs/44871327795) verified that the identical checkpoint survives separate GitHub workflow executions, without retraining; Actions artifacts still expire. See [Phase 2.4 measured results](docs/phase-2.4-results.md).
 
+## Phase 2.5 — Versioned Learning and Manual Memory Promotion
+
+The first evolving memory checkpoint was trained from fresh synthetic data while preserving its original Phase 2.4 ancestor. The [Phase 2.5 architecture](docs/phase-2.5.md) includes SHA-256 lineage, explicit validation/holdout regression gates, immutable version staging in a Git-backed registry, and a **manual-only** workflow that opens (but never merges) a memory promotion PR.
+
+**Scientific result:** the candidate improves fresh validation but slightly worsens healthy-node and novel-motion held-out predictions. The [measured evidence](docs/phase-2.5-results.md) recommends retaining the parent rather than promoting this candidate automatically. The experimental Git memory registry remains uncommitted pending human review.
+
 ## Direction
 
 The next experiments should measure multi-scene generalization and train routing weights over held-out examples; then introduce real video-derived features, versioned persistent state, and eventually alternative transport for lower-latency neural communication.
