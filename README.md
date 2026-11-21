@@ -1,6 +1,6 @@
 # NeuralMesh
 
-**Active project contract:** [One reproducible experiment and a fixed stopping rule](docs/ONE_EXPERIMENT.md). The stable tested research foundation is on `main`. The current research candidate is **not** accepted as a no-forgetting model; only the separate scientific acceptance job may qualify it for review. The historical failed trust-gating attempts are closed, not promoted.
+**Active project contract:** [One reproducible experiment and a fixed stopping rule](docs/ONE_EXPERIMENT.md). The stable tested research foundation is on `main`. [The canonical replication](docs/ONE_EXPERIMENT_RESULT.md) rebuilt the exact model from source and improved all nine aggregate seed scores, but **failed strict no-forgetting acceptance** because familiar linear and turning motion regressed. The parent remains protected; the historical failed trust-gating attempts are closed, not promoted.
 
 **Run one canonical learning experiment:** Actions → **NeuralMesh Canonical Learning Experiment** → Run workflow. The original six-runner distributed proof is a separate orchestration test.
 
