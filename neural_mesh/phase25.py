@@ -213,8 +213,8 @@ def _suite_guard(suite, max_relative, max_regime_relative):
             return False
     for regime, previous in suite["parent_regimes"].items():
         for fault in FAULTS:
-            if suite["candidate_regimes"][regime][fault] >
-                    previous[fault]*(1+max_regime_relative):
+            if (suite["candidate_regimes"][regime][fault] >
+                    previous[fault]*(1+max_regime_relative)):
                 return False
     return True
 
