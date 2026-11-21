@@ -1,0 +1,127 @@
+name: NeuralMesh Phase 2.4 - Cross-Run Memory Recall
+
+on:
+  push:
+    branches: [phase/2.4-robustness-neural-memory]
+    paths: [.github/workflows/phase24-recall.yml]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  new-scenario:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Generate new OOD motion independent of checkpoint training
+        run: python -m neural_mesh.phase24 make-ood --seed 79019 --count 64 --out new-data
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: recall-public-${{ github.run_id }}
+          path: new-data/public.json
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: recall-sealed-${{ github.run_id }}
+          path: new-data/sealed-targets.json
+          if-no-files-found: error
+          retention-days: 14
+
+  recall:
+    needs: [new-scenario]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Retrieve actual model-memory artifact from PRIOR GitHub workflow run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: p24-memory-44871190473
+          run-id: 44871190473
+          github-token: ${{ github.token }}
+          path: memory
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: recall-public-${{ github.run_id }}
+          path: fresh
+      - name: Verify identical model state from previous run and execute new inference
+        run: |
+          mkdir -p predictions
+          python - <<'PY'
+          from neural_mesh import phase24
+          expected = "8c147e3d6bad62cd9b6553738cba40dddc4f5120755273f01a366f3e235d22bc"
+          restored = phase24.restore_memory("memory/checkpoint.json")
+          actual = restored["sha256"]
+          assert actual == expected, f"cross-run memory changed: {actual}"
+          print("PERSISTENT_MEMORY_RECALL_PASS", actual, "source-run=44871190473")
+          PY
+          python -m neural_mesh.phase24 probe \
+            --memory memory/checkpoint.json --public fresh/public.json \
+            --out predictions/predictions.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: recall-predictions-${{ github.run_id }}
+          path: predictions/predictions.json
+          if-no-files-found: error
+          retention-days: 14
+
+  independent-evaluation:
+    needs: [recall]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: recall-predictions-${{ github.run_id }}
+          path: input
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: recall-sealed-${{ github.run_id }}
+          path: held-out
+      - name: Evaluate fresh test data and preserve source-run identity
+        run: |
+          mkdir -p evidence
+          python -m neural_mesh.phase24 evaluate \
+            --predictions input/predictions.json \
+            --targets held-out/sealed-targets.json \
+            --out evidence/recall-metrics.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from neural_mesh import mesh
+          p=Path("evidence/recall-metrics.json")
+          data=mesh.load(p)
+          expected="8c147e3d6bad62cd9b6553738cba40dddc4f5120755273f01a366f3e235d22bc"
+          assert data["memory_sha256"] == expected, "wrong model checkpoint in recall"
+          mesh.save("evidence/recall-provenance.json",{
+              "status":"CROSS_WORKFLOW_RUN_MEMORY_RECALL_VERIFIED",
+              "source_workflow_run":44871190473,
+              "recall_workflow_run":${{ github.run_id }},
+              "memory_sha256":expected,
+              "new_ood_seed":79019,
+              "test_scenes":data["test_scenes"],
+              "checkpoint_retention_limited":True
+          })
+          PY
+          {
+            echo "### Cross-run memory proof"
+            echo "Prior-run checkpoint 44871190473 restored without retraining."
+            echo "Fingerprint matched; fresh held-out novel motion was evaluated independently."
+            echo "Checkpoint lifetime is limited by GitHub Actions artifact retention."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: p24-cross-run-recall-${{ github.run_id }}
+          path: evidence/
+          retention-days: 30
+          if-no-files-found: error
