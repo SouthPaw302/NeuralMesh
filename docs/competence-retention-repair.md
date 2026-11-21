@@ -75,3 +75,24 @@ All state is plain JSON and protected by SHA-256 digests. No automatic mutation,
 ## Important limitations
 
 This remains a synthetic 2D forecasting model with simple supervised physics experts and a small competence tree. It does not learn by experiencing real camera video or prove general artificial intelligence. The held-out novelty families are still synthetic, and stochastic late impulses after the final observation cannot be predicted from independent random information. The benchmark is predeclared and must not be repeatedly tuned using already-revealed sealed targets.
+
+## Second validation-model attempt: curvature-risk veto
+
+The first competence-tree model also **failed validation**. Inspection of its **validation-only** training-decision artifact showed that all 36 tree candidates behaved like global trust scalars, so they could not eliminate the turning loss. In that specific validation cohort the frozen adapter improved linear by 0.54% but worsened turning by 1.03%; global 50% attenuation still worsened turning by 0.18%. This explains why a generic tree objective failed its strict no-forgetting rule.
+
+The updated model therefore also considers an **interpretable curvature-risk veto**, selecting its parameters on *new validation cases only*. The predicate is based on measured absolute turning angle and the ratio of angular deviation to observed acceleration, never a supplied regime label:
+
+```text
+risk = abs(observed_turning_angle) / (0.05 + observed_acceleration)
+if low <= abs(observed_turning_angle) <= high and risk >= risk_threshold:
+    trust = veto_trust
+else:
+    trust = nominal_trust
+forecast = protected_parent + trust * (frozen_adapter - protected_parent)
+```
+
+The bounded search uses low angles `0,0.06,0.13`, high angles `0.30,0.45,0.65,0.85`, risk thresholds `0,1,2,3,4`, veto strengths `0,0.20`, and nominal trust `0.75,1.0`. This model competes with the original competence tree, but **the validation and held-out acceptance limits remain unchanged**.
+
+This follow-up is a *new experiment* with calibration seed `29211`, known bounce/swirl training seed `49211`, and known validation seed `49212`. The fresh sealed ID seeds are `29221,29222,29223`; fresh known bounce/swirl test seeds `49221,49222,49223`; and completely novel-motion test seeds `49231,49232,49233`. The earlier held-out test seeds from the first two attempts are not used in fitting this version.
+
+The workflow is `.github/workflows/curvature29-proof.yml`. It still requires no mean linear/turning regression, preservation of familiar and newly learned skills, cross-family transfer, fault safety, and human review. **Do not infer success from CI alone; only the sealed results can support promotion.**
