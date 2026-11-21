@@ -1,0 +1,188 @@
+name: NeuralMesh 2.6.2 - Competence Map Retention Proof
+
+on:
+  push:
+    branches: [fix/2.6.2-observed-competence-tree]
+    paths: [.github/workflows/competence28-proof.yml]
+  pull_request:
+    paths:
+      - neural_mesh/**
+      - tests/**
+      - .github/workflows/competence28-proof.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: competence28-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+      - name: Verify original and competence-tree regression suite
+        run: |
+          python -m unittest discover -s tests -p 'test_*.py' -v
+          python -m neural_mesh.competence28 train --help
+          python -m neural_mesh.competence28 evaluate --help
+
+  prepare:
+    if: github.event_name != 'pull_request'
+    needs: [tests]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Prepare new validation cohorts and nine fresh never-scored tests
+        run: |
+          python -m neural_mesh.phase2 prepare --seed 28211 \
+            --train-count 512 --validation-count 128 --test-count 8 --out calibration
+          python -m neural_mesh.transfer26 subset --seed 48211 --count 256 \
+            --regimes bounce,swirl --out known-train
+          python -m neural_mesh.transfer26 subset --seed 48212 --count 128 \
+            --regimes bounce,swirl --out known-val
+          for seed in 28221 28222 28223; do
+            python -m neural_mesh.phase2 prepare --seed "$seed" \
+              --train-count 4 --validation-count 4 --test-count 256 --out "id/$seed"
+          done
+          for seed in 48221 48222 48223; do
+            python -m neural_mesh.transfer26 subset --seed "$seed" --count 128 \
+              --regimes bounce,swirl --out "known/$seed"
+          done
+          for seed in 48231 48232 48233; do
+            python -m neural_mesh.transfer26 subset --seed "$seed" --count 128 \
+              --regimes stop_start,late_impulse --out "unseen/$seed"
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: c28-training-${{ github.run_id }}
+          path: |
+            calibration/public.json
+            calibration/trainval-labels.json
+            known-train/public.json
+            known-train/targets.json
+            known-val/public.json
+            known-val/targets.json
+          retention-days: 14
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: c28-test-public-${{ github.run_id }}
+          path: |
+            id/*/public.json
+            known/*/public.json
+            unseen/*/public.json
+          retention-days: 14
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: c28-test-sealed-${{ github.run_id }}
+          path: |
+            id/*/test-labels.json
+            known/*/targets.json
+            unseen/*/targets.json
+          retention-days: 14
+          if-no-files-found: error
+
+  train-competence:
+    needs: [prepare]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Retrieve verified immutable physics adapter and parent
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: transfer26-frozen-adapter-44873535607
+          run-id: 44873535607
+          github-token: ${{ github.token }}
+          path: reference
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: c28-training-${{ github.run_id }}
+          path: data
+      - name: Train context competence map with previous skills protected
+        run: |
+          mkdir -p fitted
+          python -m neural_mesh.competence28 train \
+            --parent reference/parent.json --adapter reference/adapter.json \
+            --id-public data/calibration/public.json \
+            --id-trainval data/calibration/trainval-labels.json \
+            --known-train-public data/known-train/public.json \
+            --known-train-targets data/known-train/targets.json \
+            --known-val-public data/known-val/public.json \
+            --known-val-targets data/known-val/targets.json \
+            --out fitted
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: c28-frozen-candidate-${{ github.run_id }}
+          path: fitted/
+          retention-days: 30
+          if-no-files-found: error
+
+  evaluate-blind:
+    needs: [train-competence]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: c28-frozen-candidate-${{ github.run_id }}
+          path: fitted
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: c28-test-public-${{ github.run_id }}
+          path: test
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: c28-test-sealed-${{ github.run_id }}
+          path: test
+      - name: Test linear and turning retention separately from new-domain gains
+        run: |
+          mkdir -p evidence
+          python -m neural_mesh.competence28 evaluate \
+            --parent fitted/parent.json \
+            --adapter fitted/prior-adapter.json \
+            --candidate fitted/competence.json \
+            --decision fitted/decision.json \
+            --id-set test/id/28221/public.json,test/id/28221/test-labels.json \
+            --id-set test/id/28222/public.json,test/id/28222/test-labels.json \
+            --id-set test/id/28223/public.json,test/id/28223/test-labels.json \
+            --known-set test/known/48221/public.json,test/known/48221/targets.json \
+            --known-set test/known/48222/public.json,test/known/48222/targets.json \
+            --known-set test/known/48223/public.json,test/known/48223/targets.json \
+            --unseen-set test/unseen/48231/public.json,test/unseen/48231/targets.json \
+            --unseen-set test/unseen/48232/public.json,test/unseen/48232/targets.json \
+            --unseen-set test/unseen/48233/public.json,test/unseen/48233/targets.json \
+            --out evidence
+          cp fitted/competence.json fitted/decision.json evidence/
+          {
+            echo "### Phase 2.6.2 — observed-kinematics competence tree"
+            echo "Original parent and physics adapter are unchanged."
+            echo "New linear and turning regressions must both be zero (aggregate)."
+            echo "Passing CI does not imply passing the held-out retention gate."
+            echo "No memory snapshots were promoted."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: c28-evidence-${{ github.run_id }}
+          path: evidence/
+          retention-days: 30
+          if-no-files-found: error
