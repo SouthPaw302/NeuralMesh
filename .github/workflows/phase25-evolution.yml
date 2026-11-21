@@ -1,0 +1,187 @@
+name: NeuralMesh Phase 2.5 - Memory Evolution Candidate
+
+on:
+  push:
+    branches: [phase/2.5-memory-evolution]
+    paths: [.github/workflows/phase25-evolution.yml]
+  pull_request:
+    paths:
+      - neural_mesh/**
+      - tests/**
+      - .github/workflows/phase25-evolution.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: neural-memory-phase25-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: All offline checks and memory-integrity tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+      - run: python -m unittest discover -s tests -p 'test_*.py' -v
+
+  prepare:
+    if: github.event_name != 'pull_request'
+    needs: [tests]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: New learning cohort and independent historical regression anchor
+        run: |
+          python -m neural_mesh.phase2 prepare --seed 2505 \
+            --train-count 512 --validation-count 128 --test-count 256 --out new
+          python -m neural_mesh.phase2 prepare --seed 64013 \
+            --train-count 512 --validation-count 128 --test-count 256 --out anchor
+          python -m neural_mesh.phase24 make-ood --seed 82521 --count 128 --out novel
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: p25-new-public-${{ github.run_id }}
+          path: new/public.json
+          retention-days: 14
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: p25-new-trainval-${{ github.run_id }}
+          path: new/trainval-labels.json
+          retention-days: 14
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: p25-new-sealed-${{ github.run_id }}
+          path: new/test-labels.json
+          retention-days: 14
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: p25-anchor-${{ github.run_id }}
+          path: |
+            anchor/public.json
+            anchor/trainval-labels.json
+          retention-days: 14
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: p25-ood-public-${{ github.run_id }}
+          path: novel/public.json
+          retention-days: 14
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: p25-ood-sealed-${{ github.run_id }}
+          path: novel/sealed-targets.json
+          retention-days: 14
+          if-no-files-found: error
+
+  evolve:
+    needs: [prepare]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Retrieve verified parent checkpoint from prior Phase 2.4 workflow
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: p24-memory-44871190473
+          run-id: 44871190473
+          github-token: ${{ github.token }}
+          path: parent
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: p25-new-public-${{ github.run_id }}
+          path: fresh
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: p25-new-trainval-${{ github.run_id }}
+          path: train-only
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: p25-anchor-${{ github.run_id }}
+          path: anchor
+      - name: Incrementally fit a candidate while preserving immutable parent
+        run: |
+          python -m neural_mesh.phase24 verify-memory --memory parent/checkpoint.json
+          python -m neural_mesh.phase25 train \
+            --parent parent/checkpoint.json \
+            --new-public fresh/public.json --new-trainval train-only/trainval-labels.json \
+            --anchor-public anchor/public.json --anchor-trainval anchor/trainval-labels.json \
+            --out proposed
+          cat proposed/training-decision.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: p25-frozen-candidate-${{ github.run_id }}
+          path: proposed/
+          retention-days: 30
+          if-no-files-found: error
+
+  evaluate:
+    needs: [evolve]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: p25-frozen-candidate-${{ github.run_id }}
+          path: proposal
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: p25-new-public-${{ github.run_id }}
+          path: fresh
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: p25-new-sealed-${{ github.run_id }}
+          path: sealed
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: p25-ood-public-${{ github.run_id }}
+          path: novel
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: p25-ood-sealed-${{ github.run_id }}
+          path: novel-sealed
+      - name: Verify new and out-of-distribution sealed tests, then close or open promotion gate
+        run: |
+          mkdir -p review
+          python -m neural_mesh.phase25 evaluate \
+            --parent proposal/parent.json \
+            --candidate proposal/candidate.json \
+            --decision proposal/training-decision.json \
+            --new-public fresh/public.json \
+            --new-test sealed/test-labels.json \
+            --ood-public novel/public.json \
+            --ood-test novel-sealed/sealed-targets.json \
+            --out review
+          cp proposal/parent.json proposal/candidate.json proposal/training-decision.json review/
+          cat review/promotion-gate.json
+          {
+            echo "### Phase 2.5 — memory evolution and regression gate"
+            echo "Review \`training-decision.json\`, \`evaluation.json\`, and \`promotion-gate.json\`."
+            echo "A green job does NOT imply an eligible upgrade; blocked candidates remain blocked."
+            echo "No checkpoint is committed or promoted by this workflow."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: phase25-review-${{ github.run_id }}
+          path: review/
+          retention-days: 30
+          if-no-files-found: error
