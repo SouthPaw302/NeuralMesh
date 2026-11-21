@@ -1,0 +1,222 @@
+name: NeuralMesh Phase 2.2 - Contextual Synapses
+
+on:
+  push:
+    branches: [phase/2.2-contextual-synapses]
+    paths:
+      - .github/workflows/phase22-contextual.yml
+  pull_request:
+    paths:
+      - neural_mesh/**
+      - tests/**
+      - .github/workflows/phase22-contextual.yml
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: Independent synthetic scenario seed
+        type: string
+        required: false
+        default: '2202'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase22-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+      - run: python -m unittest discover -s tests -p 'test_*.py' -v
+
+  prepare:
+    if: github.event_name != 'pull_request'
+    needs: [tests]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Prepare a new 512/128/256 sealed four-regime scenario split
+        env:
+          SEED: ${{ inputs.seed || '2202' }}
+        run: |
+          python -m neural_mesh.phase2 prepare --seed "$SEED" \
+            --train-count 512 --validation-count 128 --test-count 256 --out dataset
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: p22-public-${{ github.run_id }}
+          path: |
+            dataset/public.json
+            dataset/weights.json
+            dataset/manifest.json
+          retention-days: 14
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: p22-trainval-${{ github.run_id }}
+          path: dataset/trainval-labels.json
+          retention-days: 14
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: p22-sealed-test-${{ github.run_id }}
+          path: dataset/test-labels.json
+          retention-days: 14
+          if-no-files-found: error
+
+  observe:
+    needs: [prepare]
+    name: "Context observe / ${{ matrix.node }}"
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        node: [position, velocity, acceleration, short_horizon, long_horizon, stabilizer]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: p22-public-${{ github.run_id }}
+          path: dataset
+      - name: Produce per-node forecasts AND neural embeddings, no labels
+        env:
+          NODE: ${{ matrix.node }}
+        run: |
+          mkdir -p outputs
+          python -m neural_mesh.phase22 observe --node "$NODE" \
+            --public dataset/public.json --weights dataset/weights.json \
+            --out "outputs/node-$NODE.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: p22-observation-${{ matrix.node }}-${{ github.run_id }}
+          path: outputs/
+          retention-days: 14
+          if-no-files-found: error
+
+  train-context:
+    needs: [observe]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: p22-public-${{ github.run_id }}
+          path: dataset
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: p22-trainval-${{ github.run_id }}
+          path: train-only
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: p22-observation-*-${{ github.run_id }}
+          path: receipts
+          merge-multiple: true
+      - name: Fit scene-dependent synapses and peer-embedding feedback on train/val ONLY
+        run: |
+          python -m neural_mesh.phase22 fit \
+            --public dataset/public.json --weights dataset/weights.json \
+            --receipts receipts --trainval train-only/trainval-labels.json \
+            --out trained
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: p22-frozen-weights-${{ github.run_id }}
+          path: trained/
+          retention-days: 30
+          if-no-files-found: error
+
+  feedback:
+    needs: [train-context]
+    name: "Peer feedback / ${{ matrix.node }}"
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        node: [position, velocity, acceleration, short_horizon, long_horizon, stabilizer]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: p22-frozen-weights-${{ github.run_id }}
+          path: trained
+      - name: Apply peer-embedding recurrent correction using frozen train-only weights
+        env:
+          NODE: ${{ matrix.node }}
+        run: |
+          mkdir -p outputs
+          python -m neural_mesh.phase22 feedback --node "$NODE" \
+            --rows trained/rows.json --router trained/router.json \
+            --out "outputs/node-$NODE.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: p22-feedback-${{ matrix.node }}-${{ github.run_id }}
+          path: outputs/
+          retention-days: 14
+          if-no-files-found: error
+
+  evaluate:
+    needs: [feedback]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: p22-public-${{ github.run_id }}
+          path: dataset
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: p22-sealed-test-${{ github.run_id }}
+          path: sealed-test
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: p22-frozen-weights-${{ github.run_id }}
+          path: trained
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: p22-feedback-*-${{ github.run_id }}
+          path: feedback
+          merge-multiple: true
+      - name: Evaluate fixed, static, context, and recurrent models on sealed targets
+        run: |
+          mkdir -p evidence
+          python -m neural_mesh.phase22 evaluate \
+            --rows trained/rows.json --weights dataset/weights.json \
+            --router trained/router.json --round2 feedback \
+            --test-labels sealed-test/test-labels.json --out evidence/metrics.json
+          cp trained/router.json evidence/router.json
+          cp dataset/manifest.json evidence/manifest.json
+          {
+            echo "### Phase 2.2 - sealed synthetic benchmark"
+            echo "See metrics.json; a green job does not prove contextual or feedback gains."
+            echo "The test labels were never downloaded by specialist or fit jobs."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: phase22-evidence-${{ github.run_id }}
+          path: evidence/
+          retention-days: 30
+          if-no-files-found: error
