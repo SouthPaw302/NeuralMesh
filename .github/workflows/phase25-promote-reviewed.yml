@@ -1,0 +1,93 @@
+name: NeuralMesh - Manually Stage Memory Registry PR
+
+# This workflow is intended to be available on the default branch AFTER
+# normal review/merge of the Phase 2.5 implementation. No automatic trigger.
+on:
+  workflow_dispatch:
+    inputs:
+      evidence_run_id:
+        description: Successful Phase 2.5 experiment workflow run ID
+        type: string
+        required: true
+      expected_candidate_sha256:
+        description: Paste the full candidate SHA-256 from reviewed evidence
+        type: string
+        required: true
+      confirmation:
+        description: Type OPEN_REVIEW_PR_ONLY (never merges the PR)
+        type: string
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  open-registry-review:
+    if: inputs.confirmation == 'OPEN_REVIEW_PR_ONLY'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EVIDENCE_RUN: ${{ inputs.evidence_run_id }}
+      EXPECTED_SHA: ${{ inputs.expected_candidate_sha256 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+      - name: Verify explicit request and provenance of successful source run
+        run: |
+          [[ "$EVIDENCE_RUN" =~ ^[0-9]+$ ]] || { echo "Invalid source run"; exit 1; }
+          [[ "$EXPECTED_SHA" =~ ^[a-f0-9]{64}$ ]] || { echo "Invalid candidate SHA-256"; exit 1; }
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$EVIDENCE_RUN" > source-run.json
+          python - <<'PY'
+          import json,os
+          data=json.load(open("source-run.json"))
+          assert data.get("conclusion")=="success", "source experiment did not pass"
+          assert data.get("head_repository",{}).get("full_name")==os.environ["GITHUB_REPOSITORY"], "wrong repo"
+          assert data.get("path")==".github/workflows/phase25-evolution.yml", "unexpected source workflow"
+          print("Source experimental run verified:",data["id"])
+          PY
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: phase25-review-${{ inputs.evidence_run_id }}
+          run-id: ${{ inputs.evidence_run_id }}
+          github-token: ${{ github.token }}
+          path: reviewed
+      - name: Verify entire candidate, lineage, test gate, and reviewed digest
+        run: |
+          python -m neural_mesh.phase25 check-promotion \
+            --parent reviewed/parent.json --candidate reviewed/candidate.json \
+            --decision reviewed/training-decision.json \
+            --report reviewed/evaluation.json --gate reviewed/promotion-gate.json
+          python - <<'PY'
+          import os
+          from neural_mesh import mesh,phase24
+          memory=phase24.restore_memory("reviewed/candidate.json")
+          expected=os.environ["EXPECTED_SHA"]
+          assert memory["sha256"]==expected, "candidate differs from manual digest"
+          print("Reviewed candidate identity:",expected)
+          PY
+      - name: Prepare immutable Git-backed registry version for human merge review
+        run: |
+          BRANCH="memory/review-${EXPECTED_SHA:0:16}-$EVIDENCE_RUN"
+          git switch -c "$BRANCH"
+          python -m neural_mesh.registry \
+            --parent reviewed/parent.json --candidate reviewed/candidate.json \
+            --decision reviewed/training-decision.json \
+            --evaluation reviewed/evaluation.json --gate reviewed/promotion-gate.json \
+            --registry-root memory/registry --source-run "$EVIDENCE_RUN"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add memory/versions/ memory/registry/
+          git diff --cached --quiet && { echo "No candidate changes"; exit 1; }
+          git commit -m "memory: propose reviewed lineage update ${EXPECTED_SHA:0:16}"
+          git push --set-upstream origin "$BRANCH"
+          gh pr create --base main --head "$BRANCH" \
+            --title "Memory registry: review candidate ${EXPECTED_SHA:0:16}" \
+            --body "This PR proposes a Git-backed immutable memory checkpoint from Phase 2.5 run $EVIDENCE_RUN. Parent, candidate and sealed evaluation digests were verified. **Nothing is auto-promoted.** The active pointer changes only if a person reviews and merges this PR. Candidate digest: $EXPECTED_SHA."
+          echo "Manual review PR opened. Repository main was NOT directly modified."
