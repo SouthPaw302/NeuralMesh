@@ -1,0 +1,187 @@
+name: NeuralMesh Phase 2.3 - Selective Feedback Cross Seed
+
+on:
+  # One bounded experiment when this workflow is first committed on the phase branch.
+  push:
+    branches: [phase/2.3-selective-feedback-cross-seed]
+    paths: [.github/workflows/phase23-cross-seed.yml]
+  # Subsequent PR pushes execute tests only; no unrequested multi-runner load.
+  pull_request:
+    paths:
+      - neural_mesh/**
+      - tests/**
+      - .github/workflows/phase23-cross-seed.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase23-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Phase 1 through 2.3 protocol and integrity tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+      - name: Run tests, not a filename filter that skips them
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+
+  prepare:
+    if: github.event_name != 'pull_request'
+    needs: [tests]
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        seed: [64013, 74129, 85021, 91153, 104729]
+    name: "Prepare independently-seeded sample / ${{ matrix.seed }}"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Generate independently randomized motion regimes
+        env:
+          SEED: ${{ matrix.seed }}
+        run: |
+          python -m neural_mesh.phase23 prepare --seed "$SEED" \
+            --train-count 512 --validation-count 128 --test-count 256 \
+            --out dataset
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: p23-public-${{ matrix.seed }}-${{ github.run_id }}
+          path: |
+            dataset/public.json
+            dataset/weights.json
+            dataset/manifest.json
+          retention-days: 14
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: p23-trainval-${{ matrix.seed }}-${{ github.run_id }}
+          path: dataset/trainval-labels.json
+          retention-days: 14
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: p23-sealed-test-${{ matrix.seed }}-${{ github.run_id }}
+          path: dataset/test-labels.json
+          retention-days: 14
+          if-no-files-found: error
+
+  train:
+    needs: [prepare]
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        seed: [64013, 74129, 85021, 91153, 104729]
+    name: "Fit selective synapses / ${{ matrix.seed }}"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: p23-public-${{ matrix.seed }}-${{ github.run_id }}
+          path: dataset
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: p23-trainval-${{ matrix.seed }}-${{ github.run_id }}
+          path: train-only
+      - name: Train Phase 2.2 corrections and Phase 2.3 suppression gate
+        run: |
+          python -m neural_mesh.phase23 fit \
+            --public dataset/public.json --weights dataset/weights.json \
+            --trainval train-only/trainval-labels.json --out frozen
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: p23-frozen-${{ matrix.seed }}-${{ github.run_id }}
+          path: frozen/
+          retention-days: 30
+          if-no-files-found: error
+
+  evaluate:
+    needs: [train]
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        seed: [64013, 74129, 85021, 91153, 104729]
+    name: "Sealed held-out evaluation / ${{ matrix.seed }}"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: p23-frozen-${{ matrix.seed }}-${{ github.run_id }}
+          path: frozen
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: p23-sealed-test-${{ matrix.seed }}-${{ github.run_id }}
+          path: sealed
+      - name: Score without updating frozen gate weights
+        env:
+          SEED: ${{ matrix.seed }}
+        run: |
+          mkdir -p evidence
+          python -m neural_mesh.phase23 evaluate \
+            --seed "$SEED" --rows frozen/rows.json \
+            --phase22-router frozen/phase22-router.json \
+            --selector frozen/phase23-selector.json \
+            --test-labels sealed/test-labels.json \
+            --out "evidence/seed-$SEED.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: p23-score-${{ matrix.seed }}-${{ github.run_id }}
+          path: evidence/
+          retention-days: 30
+          if-no-files-found: error
+
+  aggregate:
+    needs: [evaluate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: p23-score-*-${{ github.run_id }}
+          path: results
+          merge-multiple: true
+      - name: Verify all five independent seeds and aggregate comparisons
+        run: |
+          mkdir -p evidence
+          python -m neural_mesh.phase23 aggregate \
+            --results results --seeds 64013,74129,85021,91153,104729 \
+            --out evidence/summary.json
+          cp results/seed-*.json evidence/
+          {
+            echo "### Phase 2.3 — independent seed replication"
+            echo "Five parallel GitHub jobs executed each entire six-specialist logical mesh per seed."
+            echo "Important: unlike Phase 2.2, this robustness workflow does not allocate separate GitHub runners for every specialist."
+            echo "Inspect per-seed failures and harms; a green CI job is not an accuracy claim."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: phase23-cross-seed-evidence-${{ github.run_id }}
+          path: evidence/
+          retention-days: 30
+          if-no-files-found: error
