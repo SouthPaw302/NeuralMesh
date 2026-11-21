@@ -374,11 +374,6 @@ def evaluate(parent_file,adapter_file,temporal_file,decision_file,
             "parent":statistics.fmean(r["parent"]["mse"] for r in subset),
             "adapter":statistics.fmean(r["adapter"]["mse"] for r in subset),
             "temporal":statistics.fmean(r["temporal"]["mse"] for r in subset),
-            "regimes":{name:{
-                reg:statistics.fmean(r[name]["regimes"][reg] for r in subset)
-                for reg in allowed}
-                for name in ("parent","adapter","temporal")
-            } if False else {},
             "seed_wins":sum(r["temporal"]["mse"]<r["parent"]["mse"] for r in subset)}
         allowed=ID if group=="id" else KNOWN if group=="known" else UNKNOWN
         summary[group]["regimes"]={reg:{
@@ -392,7 +387,10 @@ def evaluate(parent_file,adapter_file,temporal_file,decision_file,
         known["temporal"]<=known["adapter"]*1.10)
     unseen_ok=unseen["temporal"]<=unseen["parent"]*.995 and (
         unseen["temporal"]<=unseen["adapter"]*1.02)
-    passed=bool(selected) and id_ok and known_ok and unseen_ok
+    fault_ok=all(
+        e["temporal"]["faults"][f] <= e["parent"]["faults"][f]*1.02
+        for e in outcomes if e["kind"]=="id" for f in FAULTS)
+    passed=bool(selected) and id_ok and known_ok and unseen_ok and fault_ok
     result={"schema":SCHEMA,
             "status":"SIX_FRAME_RETENTION_SUPPORTED" if passed else (
                 "NO_VALIDATED_SIX_FRAME_GATE" if selected is None
@@ -402,7 +400,7 @@ def evaluate(parent_file,adapter_file,temporal_file,decision_file,
             "decision_sha256":mesh.digest(decision),
             "classification_validation":decision["classification_validation"],
             "id_retention_pass":id_ok,"known_transfer_pass":known_ok,
-            "unseen_transfer_pass":unseen_ok,
+            "unseen_transfer_pass":unseen_ok,"fault_safety_pass":fault_ok,
             "summary":summary,"per_seed":outcomes,
             "total_requested_scenes":sum(x["requested_scenes"] for x in outcomes),
             "manual_review_required":True,"original_memory_unmodified":True}
