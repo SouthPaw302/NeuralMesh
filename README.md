@@ -15,6 +15,8 @@ A complete 20-node state checkpoint is emitted for deliberate **cross-run contin
 
 This is a functioning small numerical learning experiment, **not** an implementation of Gemma/Qwen/LFM2 language models or multimodal embedded encoders. The previous 20-worker inference proof remains independent.
 
+[First measured learning results](docs/SPARSE20_RESULTS.md): **20 local-training jobs overlapped in both waves** and a separate GitHub workflow successfully restored all 20 learned models for generation two. But peer distillation increased held-out MSE by **0.48%** versus matched independent local learning, so the **scientific acceptance check failed** and no weights were promoted.
+
 ## Active 20-runner execution
 
 **New:** [20 parallel GitHub-hosted workers, twice](docs/TWENTY_PARALLEL_RUNNERS.md). This experiment uses **20 independently trained specialists** across two consecutive waves of **20 actual runner jobs each**, with `max-parallel: 20` and 19 directed peer messages per worker. The `audit-parallel` job checks the **observed** peak simultaneous runner count in each wave and fails if fewer than 20 overlapped. The new pipeline is **Actions → NeuralMesh 20 Parallel Runners**, not the six-worker legacy workflow.
