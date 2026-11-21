@@ -87,7 +87,10 @@ class Phase23Tests(unittest.TestCase):
             phase23.activation(v,{"kind":"unsafe"})
 
     def test_aggregation_rejects_missing_and_duplicate_seeds(self):
-        sample=mesh.load(self.path/"seed-2303.json")
+        sample=phase23.evaluate_seed(2303, self.path/"trained/rows.json",
+            self.path/"trained/phase22-router.json",
+            self.path/"trained/phase23-selector.json",
+            self.dataset/"test-labels.json", self.path/"seed-2303.json")
         with tempfile.TemporaryDirectory() as tmp:
             directory=Path(tmp)
             for seed in (17,23,29):
