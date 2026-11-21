@@ -1,0 +1,199 @@
+name: NeuralMesh Repair - Replay and Generalization Proof
+
+on:
+  push:
+    branches: [fix/2.5-replay-regression-gates]
+    paths: [.github/workflows/repair25-replay.yml]
+  pull_request:
+    paths:
+      - neural_mesh/**
+      - tests/**
+      - .github/workflows/repair25-replay.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: replay-repair-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+      - name: Execute full regression suite including exact deployed feature check
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+
+  prepare:
+    if: github.event_name != 'pull_request'
+    needs: [tests]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Generate new training, old replay, three ID holdouts and three OOD holdouts
+        run: |
+          python -m neural_mesh.phase2 prepare --seed 26051 \
+            --train-count 512 --validation-count 128 --test-count 256 --out fresh
+          python -m neural_mesh.phase2 prepare --seed 64013 \
+            --train-count 512 --validation-count 128 --test-count 256 --out replay
+          mkdir -p id/26051
+          cp fresh/public.json id/26051/public.json
+          cp fresh/test-labels.json id/26051/test-labels.json
+          for seed in 26052 26053; do
+            python -m neural_mesh.phase2 prepare --seed "$seed" \
+              --train-count 32 --validation-count 32 --test-count 256 \
+              --out "id/$seed"
+          done
+          for seed in 97313 97417 97523; do
+            python -m neural_mesh.phase24 make-ood --seed "$seed" --count 128 --out "ood/$seed"
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: replay25-fit-public-${{ github.run_id }}
+          path: |
+            fresh/public.json
+            fresh/trainval-labels.json
+            replay/public.json
+            replay/trainval-labels.json
+          retention-days: 14
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: replay25-id-public-${{ github.run_id }}
+          path: |
+            id/26051/public.json
+            id/26052/public.json
+            id/26053/public.json
+          retention-days: 14
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: replay25-id-sealed-${{ github.run_id }}
+          path: |
+            id/26051/test-labels.json
+            id/26052/test-labels.json
+            id/26053/test-labels.json
+          retention-days: 14
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: replay25-ood-public-${{ github.run_id }}
+          path: |
+            ood/97313/public.json
+            ood/97417/public.json
+            ood/97523/public.json
+          retention-days: 14
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: replay25-ood-sealed-${{ github.run_id }}
+          path: |
+            ood/97313/sealed-targets.json
+            ood/97417/sealed-targets.json
+            ood/97523/sealed-targets.json
+          retention-days: 14
+          if-no-files-found: error
+
+  fit-replay:
+    needs: [prepare]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: p24-memory-44871190473
+          run-id: 44871190473
+          github-token: ${{ github.token }}
+          path: parent
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: replay25-fit-public-${{ github.run_id }}
+          path: data
+      - name: Rehearse prior knowledge and train deployed residual, not surrogate
+        run: |
+          mkdir -p proposed
+          python -m neural_mesh.replay25 train \
+            --parent parent/checkpoint.json \
+            --new-public data/fresh/public.json \
+            --new-trainval data/fresh/trainval-labels.json \
+            --replay-public data/replay/public.json \
+            --replay-trainval data/replay/trainval-labels.json \
+            --out proposed
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: replay25-frozen-${{ github.run_id }}
+          path: proposed/
+          retention-days: 30
+          if-no-files-found: error
+
+  score-blind:
+    needs: [fit-replay]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: replay25-frozen-${{ github.run_id }}
+          path: proposed
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: replay25-id-public-${{ github.run_id }}
+          path: id
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: replay25-id-sealed-${{ github.run_id }}
+          path: id
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: replay25-ood-public-${{ github.run_id }}
+          path: ood
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: replay25-ood-sealed-${{ github.run_id }}
+          path: ood
+      - name: Enforce independent held-out improvement before recommending memory
+        run: |
+          mkdir -p evidence
+          python -m neural_mesh.replay25 evaluate \
+            --parent proposed/parent.json \
+            --candidate proposed/candidate.json \
+            --decision proposed/decision.json \
+            --id-set id/26051/public.json,id/26051/test-labels.json \
+            --id-set id/26052/public.json,id/26052/test-labels.json \
+            --id-set id/26053/public.json,id/26053/test-labels.json \
+            --ood-set ood/97313/public.json,ood/97313/sealed-targets.json \
+            --ood-set ood/97417/public.json,ood/97417/sealed-targets.json \
+            --ood-set ood/97523/public.json,ood/97523/sealed-targets.json \
+            --out evidence
+          cp proposed/*.json evidence/
+          {
+            echo "### Repaired neural memory learner"
+            echo "Fitted exact robust deployed objective with historical replay."
+            echo "Evaluated 3 fresh ID and 3 fresh OOD held-out distributions."
+            echo "A green CI result does not imply promotion; BLOCKED_* remains blocked."
+            echo "No weights were auto-promoted. Previous Phase 2.5 gate is NOT sufficient."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: replay25-evidence-${{ github.run_id }}
+          path: evidence/
+          retention-days: 30
+          if-no-files-found: error
