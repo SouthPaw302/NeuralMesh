@@ -87,7 +87,7 @@ The bounded experiment uses five independent parallel GitHub training jobs (one 
 
 Phase 2.4 introduces a SHA-256-verified **memory checkpoint** storing trained specialist readouts, contextual synapses, peer-feedback corrections, and validation-calibrated fault handling. It tests missing and corrupted nodes under four novel synthetic motion families, comparing the fault-aware predictor against the previous naive routing.
 
-Three independent GitHub probe runners restore the same frozen checkpoint; sealed target coordinates remain isolated until evaluation. [Phase 2.4 protocol](docs/phase-2.4.md) documents the architecture and limitations. The long-lived memory promise remains conditional on an independently verified cross-workflow-run recall; Actions artifacts expire.
+Three independent GitHub probe runners restore the same frozen checkpoint; sealed target coordinates remain isolated until evaluation. [Phase 2.4 protocol](docs/phase-2.4.md) documents the architecture and limitations. An independent [cross-run recall](https://github.com/SouthPaw302/NeuralMesh/actions/runs/44871327795) verified that the identical checkpoint survives separate GitHub workflow executions, without retraining; Actions artifacts still expire. See [Phase 2.4 measured results](docs/phase-2.4-results.md).
 
 ## Direction
 
