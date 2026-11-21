@@ -83,6 +83,12 @@ Phase 2.3 trains a small scene-conditioned **feedback strength controller**, all
 
 The bounded experiment uses five independent parallel GitHub training jobs (one per seed), each evaluating six logical specialists, and separate sealed-test evaluation runners. It is not a 30-runner neural interconnect. See [Phase 2.3 research protocol](docs/phase-2.3.md).
 
+## Phase 2.4 — Fault Tolerance and Versioned Neural Memory
+
+Phase 2.4 introduces a SHA-256-verified **memory checkpoint** storing trained specialist readouts, contextual synapses, peer-feedback corrections, and validation-calibrated fault handling. It tests missing and corrupted nodes under four novel synthetic motion families, comparing the fault-aware predictor against the previous naive routing.
+
+Three independent GitHub probe runners restore the same frozen checkpoint; sealed target coordinates remain isolated until evaluation. [Phase 2.4 protocol](docs/phase-2.4.md) documents the architecture and limitations. An independent [cross-run recall](https://github.com/SouthPaw302/NeuralMesh/actions/runs/44871327795) verified that the identical checkpoint survives separate GitHub workflow executions, without retraining; Actions artifacts still expire. See [Phase 2.4 measured results](docs/phase-2.4-results.md).
+
 ## Direction
 
 The next experiments should measure multi-scene generalization and train routing weights over held-out examples; then introduce real video-derived features, versioned persistent state, and eventually alternative transport for lower-latency neural communication.
