@@ -72,20 +72,58 @@ def _classifier(train,validation):
         "labels_used_only_for_diagnostic_not_for_live_prediction":True}
 
 
+
+def _observed_examples(scenes,targets,memory,domain):
+    """Report fail-closed prediction abstentions, never hide them as successes."""
+    examples=[]
+    rejected={r:{f:0 for f in phase24.FAULTS} for r in REGIMES}
+    for idx,scene in enumerate(scenes):
+        for fault in phase24.FAULTS:
+            try:
+                examples.append(transfer26._example(
+                    scene,targets[scene["id"]],memory,fault,idx,domain))
+            except ValueError as exc:
+                if str(exc) not in (
+                    "not enough consistent specialist predictions",
+                    "insufficient healthy nodes"):
+                    raise
+                rejected[scene["regime"]][fault]+=1
+    return examples,rejected
+
+
+
 def run(parent_file,adapter_file,id_public,id_labels,
         novel_train_public,novel_train_targets,novel_val_public,
         novel_val_targets,out):
     parent,adapter=safety27._load_sources(parent_file,adapter_file)
     memory=parent["payload"]
     original=adapter["payload"]["model"]
-    old_train,_=safety27._collect_id(id_public,id_labels,"train",memory)
-    old_valid,_=safety27._collect_id(id_public,id_labels,"validation",memory)
-    new_train,_=safety27._collect_ood(novel_train_public,novel_train_targets,
-                                      transfer26.KNOWN,memory)
-    new_valid,_=safety27._collect_ood(novel_val_public,novel_val_targets,
-                                      transfer26.KNOWN,memory)
-    train=safety27._augment(old_train+new_train,original)
-    valid=safety27._augment(old_valid+new_valid,original)
+    id_train_rows,id_train_targets,_=transfer26._id_rows(
+        id_public,id_labels,"train")
+    id_val_rows,id_val_targets,_=transfer26._id_rows(
+        id_public,id_labels,"validation")
+    known_train_public_data,known_train_labels=transfer26._load_ood(
+        novel_train_public,novel_train_targets,transfer26.KNOWN)
+    known_val_public_data,known_val_labels=transfer26._load_ood(
+        novel_val_public,novel_val_targets,transfer26.KNOWN)
+    cohorts=(
+        ("id_train",id_train_rows,id_train_targets,"id"),
+        ("id_validation",id_val_rows,id_val_targets,"id"),
+        ("known_train",known_train_public_data["scenes"],
+         known_train_labels["targets"],"ood"),
+        ("known_validation",known_val_public_data["scenes"],
+         known_val_labels["targets"],"ood")
+    )
+    collected={}
+    omissions={}
+    requested={}
+    for name,scenes,targets,domain in cohorts:
+        observed,rejected=_observed_examples(scenes,targets,memory,domain)
+        collected[name]=safety27._augment(observed,original)
+        omissions[name]=rejected
+        requested[name]=len(scenes)*len(phase24.FAULTS)
+    train=collected["id_train"]+collected["known_train"]
+    valid=collected["id_validation"]+collected["known_validation"]
     by_regime={r:[e for e in train if e["regime"]==r] for r in REGIMES}
     opt_from_train={reg:_optimal_alpha(rows) for reg,rows in by_regime.items()}
     opt_from_valid={reg:_optimal_alpha([e for e in valid if e["regime"]==reg])
@@ -104,6 +142,9 @@ def run(parent_file,adapter_file,id_public,id_labels,
         "validation_infeasible_label_oracle_ceiling":_score(
             valid,lambda e:opt_from_valid[e["regime"]]),
         "observation_separability":_classifier(train,valid),
+        "requested_fault_state_cases":requested,
+        "scored_fault_state_cases":{k:len(v) for k,v in collected.items()},
+        "explicit_model_abstentions":omissions,
         "no_test_labels_seen":True,
         "diagnostic_oracles_not_deployable":True,
         "memory_unchanged":True}
