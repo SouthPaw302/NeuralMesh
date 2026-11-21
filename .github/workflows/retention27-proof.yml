@@ -1,0 +1,184 @@
+name: NeuralMesh 2.6.1 - Retention Safety Repair
+
+on:
+  push:
+    branches: [fix/2.6.1-retention-safe-routing]
+    paths: [.github/workflows/retention27-proof.yml]
+  pull_request:
+    paths:
+      - neural_mesh/**
+      - tests/**
+      - .github/workflows/retention27-proof.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: retention27-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Full offline integrity, lineage, and no-forgetting tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+      - name: Run all real tests
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+
+  prepare:
+    if: github.event_name != 'pull_request'
+    needs: [tests]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Generate fresh safety-train/validation and nine never-scored held-out cohorts
+        run: |
+          python -m neural_mesh.phase2 prepare --seed 27211 \
+            --train-count 512 --validation-count 128 --test-count 8 --out calibration
+          python -m neural_mesh.transfer26 subset --seed 47211 --count 256 \
+            --regimes bounce,swirl --out known-train
+          python -m neural_mesh.transfer26 subset --seed 47212 --count 128 \
+            --regimes bounce,swirl --out known-val
+          for seed in 27221 27222 27223; do
+            python -m neural_mesh.phase2 prepare --seed "$seed" \
+              --train-count 4 --validation-count 4 --test-count 256 --out "id/$seed"
+          done
+          for seed in 47221 47222 47223; do
+            python -m neural_mesh.transfer26 subset --seed "$seed" --count 128 \
+              --regimes bounce,swirl --out "known/$seed"
+          done
+          for seed in 47231 47232 47233; do
+            python -m neural_mesh.transfer26 subset --seed "$seed" --count 128 \
+              --regimes stop_start,late_impulse --out "unseen/$seed"
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: r27-calibration-${{ github.run_id }}
+          path: |
+            calibration/public.json
+            calibration/trainval-labels.json
+            known-train/public.json
+            known-train/targets.json
+            known-val/public.json
+            known-val/targets.json
+          retention-days: 14
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: r27-public-heldout-${{ github.run_id }}
+          path: |
+            id/*/public.json
+            known/*/public.json
+            unseen/*/public.json
+          retention-days: 14
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: r27-sealed-targets-${{ github.run_id }}
+          path: |
+            id/*/test-labels.json
+            known/*/targets.json
+            unseen/*/targets.json
+          retention-days: 14
+          if-no-files-found: error
+
+  fit-safety:
+    needs: [prepare]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Restore exact prior adapter and frozen parent from earlier proof
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: transfer26-frozen-adapter-44873535607
+          run-id: 44873535607
+          github-token: ${{ github.token }}
+          path: original
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: r27-calibration-${{ github.run_id }}
+          path: calibration
+      - name: Train observation-only trust controller with zero old-model mutation
+        run: |
+          mkdir -p protected
+          python -m neural_mesh.safety27 train \
+            --parent original/parent.json --adapter original/adapter.json \
+            --id-public calibration/calibration/public.json \
+            --id-labels calibration/calibration/trainval-labels.json \
+            --known-train-public calibration/known-train/public.json \
+            --known-train-labels calibration/known-train/targets.json \
+            --known-val-public calibration/known-val/public.json \
+            --known-val-labels calibration/known-val/targets.json \
+            --out protected
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: r27-frozen-policy-${{ github.run_id }}
+          path: protected/
+          retention-days: 30
+          if-no-files-found: error
+
+  evaluate-sealed:
+    needs: [fit-safety]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: r27-frozen-policy-${{ github.run_id }}
+          path: protected
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: r27-public-heldout-${{ github.run_id }}
+          path: test
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: r27-sealed-targets-${{ github.run_id }}
+          path: test
+      - name: Test all nine new cohorts before any policy adoption
+        run: |
+          mkdir -p evidence
+          python -m neural_mesh.safety27 evaluate \
+            --parent protected/parent.json --adapter protected/prior-adapter.json \
+            --safety protected/safety.json --decision protected/decision.json \
+            --id-set test/id/27221/public.json,test/id/27221/test-labels.json \
+            --id-set test/id/27222/public.json,test/id/27222/test-labels.json \
+            --id-set test/id/27223/public.json,test/id/27223/test-labels.json \
+            --known-set test/known/47221/public.json,test/known/47221/targets.json \
+            --known-set test/known/47222/public.json,test/known/47222/targets.json \
+            --known-set test/known/47223/public.json,test/known/47223/targets.json \
+            --unseen-set test/unseen/47231/public.json,test/unseen/47231/targets.json \
+            --unseen-set test/unseen/47232/public.json,test/unseen/47232/targets.json \
+            --unseen-set test/unseen/47233/public.json,test/unseen/47233/targets.json \
+            --out evidence
+          cp protected/safety.json protected/decision.json evidence/
+          {
+            echo "### Phase 2.6.1 — repaired linear/turning retention"
+            echo "Review per-regime errors; CI success is not proof of learning."
+            echo "This experiment uses entirely fresh sealed seeds."
+            echo "A rejected gate preserves the Phase 2.4 parent model."
+            echo "No weights were committed, promoted, or merged."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: r27-evidence-${{ github.run_id }}
+          path: evidence/
+          retention-days: 30
+          if-no-files-found: error
