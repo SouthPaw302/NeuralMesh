@@ -1,8 +1,8 @@
-name: NeuralMesh 2.6 - Cross-Domain Transfer Without Forgetting
+name: NeuralMesh Canonical Learning Experiment
 
 on:
   push:
-    branches: [research/2.6-cross-domain-physics-experts]
+    branches: [stabilize/single-source-of-truth, main]
     paths: [.github/workflows/transfer26-domains.yml]
   pull_request:
     paths:
@@ -52,15 +52,15 @@ jobs:
             --regimes bounce,swirl --out known-train
           python -m neural_mesh.transfer26 subset --seed 46112 --count 128 \
             --regimes bounce,swirl --out known-val
-          for seed in 26121 26122 26123; do
+          for seed in 36121 36122 36123; do
             python -m neural_mesh.phase2 prepare --seed "$seed" \
               --train-count 4 --validation-count 4 --test-count 256 --out "id/$seed"
           done
-          for seed in 46121 46122 46123; do
+          for seed in 56121 56122 56123; do
             python -m neural_mesh.transfer26 subset --seed "$seed" --count 128 \
               --regimes bounce,swirl --out "known/$seed"
           done
-          for seed in 46131 46132 46133; do
+          for seed in 56131 56132 56133; do
             python -m neural_mesh.transfer26 subset --seed "$seed" --count 128 \
               --regimes stop_start,late_impulse --out "unseen/$seed"
           done
@@ -105,12 +105,26 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: p24-memory-44871190473
-          run-id: 44871190473
-          github-token: ${{ github.token }}
-          path: memory
+      - name: Rebuild and verify immutable parent from source, not an expiring artifact
+        run: |
+          mkdir -p memory
+          python -m neural_mesh.phase2 prepare --seed 64013 \
+            --train-count 512 --validation-count 128 --test-count 256 \
+            --out canonical-parent
+          python -m neural_mesh.phase24 train-memory \
+            --public canonical-parent/public.json \
+            --weights canonical-parent/weights.json \
+            --trainval canonical-parent/trainval-labels.json \
+            --out memory/checkpoint.json
+          python - <<'PY'
+          from neural_mesh import phase24
+          expected = "8c147e3d6bad62cd9b6553738cba40dddc4f5120755273f01a366f3e235d22bc"
+          actual = phase24.restore_memory("memory/checkpoint.json")["sha256"]
+          assert actual == expected, (
+              "STOP: reference state changed; cannot silently train on an "
+              f"unverified parent {actual}")
+          print("REFERENCE_REPRODUCIBLE", actual)
+          PY
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: transfer26-training-${{ github.run_id }}
@@ -163,22 +177,22 @@ jobs:
             --parent frozen/parent.json \
             --adapter frozen/adapter.json \
             --decision frozen/decision.json \
-            --id-set test/id/26121/public.json,test/id/26121/test-labels.json \
-            --id-set test/id/26122/public.json,test/id/26122/test-labels.json \
-            --id-set test/id/26123/public.json,test/id/26123/test-labels.json \
-            --known-set test/known/46121/public.json,test/known/46121/targets.json \
-            --known-set test/known/46122/public.json,test/known/46122/targets.json \
-            --known-set test/known/46123/public.json,test/known/46123/targets.json \
-            --unseen-set test/unseen/46131/public.json,test/unseen/46131/targets.json \
-            --unseen-set test/unseen/46132/public.json,test/unseen/46132/targets.json \
-            --unseen-set test/unseen/46133/public.json,test/unseen/46133/targets.json \
+            --id-set test/id/36121/public.json,test/id/36121/test-labels.json \
+            --id-set test/id/36122/public.json,test/id/36122/test-labels.json \
+            --id-set test/id/36123/public.json,test/id/36123/test-labels.json \
+            --known-set test/known/56121/public.json,test/known/56121/targets.json \
+            --known-set test/known/56122/public.json,test/known/56122/targets.json \
+            --known-set test/known/56123/public.json,test/known/56123/targets.json \
+            --unseen-set test/unseen/56131/public.json,test/unseen/56131/targets.json \
+            --unseen-set test/unseen/56132/public.json,test/unseen/56132/targets.json \
+            --unseen-set test/unseen/56133/public.json,test/unseen/56133/targets.json \
             --out evidence
           cp frozen/decision.json frozen/adapter.json evidence/
           {
-            echo "### Phase 2.6 — cross-domain transfer, not infra"
+            echo "### One reproducible learning experiment — no past-run dependency"
             echo "Three independent ID, three known-OOD, and three zero-shot unseen-family datasets."
             echo "An improvement on exposed novel physics alone is NOT enough."
-            echo "No memory updated. Check status and all per-regime/regression losses."
+            echo "No memory updated. A separate scientific acceptance job explicitly blocks forgetting."
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -186,3 +200,35 @@ jobs:
           path: evidence/
           retention-days: 30
           if-no-files-found: error
+
+  scientific-acceptance:
+    needs: [evaluate-blind]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: transfer26-evidence-${{ github.run_id }}
+          path: evidence
+      - name: STOP unless old skills and new/unknown families all improve
+        run: |
+          python - <<'PY'
+          from neural_mesh import mesh
+          r = mesh.load("evidence/evaluation.json")
+          groups = {x["category"]:x for x in r["per_dataset"]}
+          s = r["summary"]
+          assert s["id"]["relative_change"] < 0, "STOP: familiar motion regressed"
+          assert s["known"]["relative_change"] <= -0.10, "STOP: insufficient newly learned improvement"
+          assert s["unseen"]["relative_change"] <= 0, "STOP: unknown physics regressed"
+          for kind in ("id", "known", "unseen"):
+              assert s[kind]["seed_wins"] >= 2, f"STOP: {kind} seed replication failed"
+          id_rows = [x for x in r["per_dataset"] if x["category"]=="id"]
+          for family in ("linear","turning"):
+              base = sum(row["parent_regimes"][family]["none"] for row in id_rows)/len(id_rows)
+              improved = sum(row["candidate_regimes"][family]["none"] for row in id_rows)/len(id_rows)
+              assert improved <= base, f"STOP: prior {family} skill regressed"
+          print("SCIENTIFIC_ACCEPTED_FOR_REVIEW_ONLY")
+          PY
