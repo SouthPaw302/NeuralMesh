@@ -1,5 +1,10 @@
 # NeuralMesh
 
+**Active project contract:** [One reproducible experiment and a fixed stopping rule](docs/ONE_EXPERIMENT.md). The stable tested research foundation is on `main`. The current research candidate is **not** accepted as a no-forgetting model; only the separate scientific acceptance job may qualify it for review. The historical failed trust-gating attempts are closed, not promoted.
+
+**Run one canonical learning experiment:** Actions → **NeuralMesh Canonical Learning Experiment** → Run workflow. The original six-runner distributed proof is a separate orchestration test.
+
+
 An experimental distributed neural mesh built on GitHub Actions.
 
 **Status: v0 reproducible research prototype.** Six independent learned numerical specialist modules predict motion from different noisy observations. GitHub-hosted workers exchange vector predictions through two rounds of directed, weighted feedback. A final evaluator measures whether the collective improves on the best standalone node.
@@ -107,9 +112,9 @@ The mesh now combines its frozen six-node forecast with four interpretable physi
 
 The [first nine-seed held-out results](docs/phase-2.6-results.md) improved mean error **1.9% on familiar motion**, **20.4% on newly trained motion families**, and **2.9% on never-trained motion families**. All nine independent test seeds improved in aggregate; **familiar linear motion worsened by 5.5%**, so retention across every capability remains unproven. No model memory was auto-promoted.
 
-## Direction
+## Current scientific decision
 
-The next experiments should measure multi-scene generalization and train routing weights over held-out examples; then introduce real video-derived features, versioned persistent state, and eventually alternative transport for lower-latency neural communication.
+Do not add another phase or corrective router in response to a red run. The [canonical experiment](docs/ONE_EXPERIMENT.md) must demonstrate replicated unseen gains **and** retention of familiar linear and turning motion before an adapter may even be considered for promotion. If it fails, retain the parent and report the limitation. The six-runner distributed orchestration and model accuracy are separate claims.
 
 ## License
 
