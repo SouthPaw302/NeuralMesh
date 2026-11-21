@@ -1,0 +1,316 @@
+name: NeuralMesh 20 Parallel Runners
+
+on:
+  push:
+    branches: [feat/20-parallel-runners]
+    paths: [.github/workflows/neural-mesh-20.yml]
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: Reproducible 20-node motion seed
+        required: false
+        default: '314159'
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: neuralmesh-20-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Test 20 specialist identities and all-to-all protocol
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+      - run: python -m unittest discover -s tests -p 'test_*.py' -v
+
+  prepare:
+    if: github.event_name != 'pull_request'
+    needs: [tests]
+    name: Train 20 distinct specialists and seal future target
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Prepare distinct node readouts and independent observation packets
+        env:
+          MESH_SEED: ${{ inputs.seed || '314159' }}
+        run: |
+          python -m neural_mesh.swarm20 prepare --seed "$MESH_SEED" --out state
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: swarm20-input-${{ github.run_id }}
+          path: |
+            state/weights.json
+            state/observation.json
+          retention-days: 14
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: swarm20-sealed-${{ github.run_id }}
+          path: state/truth.json
+          retention-days: 14
+          if-no-files-found: error
+
+  wave-1:
+    needs: [prepare]
+    name: "Wave 1 / ${{ matrix.node }}"
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        node: [position-00, position-01, position-02, position-03, velocity-00, velocity-01, velocity-02, velocity-03, acceleration-00, acceleration-01, acceleration-02, acceleration-03, curvature-00, curvature-01, curvature-02, curvature-03, stabilizer-00, stabilizer-01, stabilizer-02, stabilizer-03]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: swarm20-input-${{ github.run_id }}
+          path: input
+      - name: First-round independent forecast, physically on this runner
+        env:
+          NODE: ${{ matrix.node }}
+        run: |
+          mkdir -p packets
+          python -m neural_mesh.swarm20 node --name "$NODE" --stage 1 \
+            --observations input/observation.json --weights input/weights.json \
+            --out "packets/node-$NODE.json"
+          echo "Node $NODE ran on runner ${RUNNER_NAME} on host ${HOSTNAME}"
+          # Keep all fast worker jobs alive long enough to verify actual
+          # overlap from GitHub job start/finish timestamps (not claimed).
+          sleep 75
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: swarm20-r1-${{ matrix.node }}-${{ github.run_id }}
+          path: packets/
+          retention-days: 14
+          if-no-files-found: error
+
+  synapse-1:
+    needs: [wave-1]
+    name: Combine all 20 receipts and compute 19-peer routing
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: swarm20-input-${{ github.run_id }}
+          path: input
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: swarm20-r1-*-${{ github.run_id }}
+          path: receipts
+          merge-multiple: true
+      - run: |
+          python -m neural_mesh.swarm20 integrate --stage 1 \
+            --weights input/weights.json --outputs receipts --out packet.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: swarm20-synapse-1-${{ github.run_id }}
+          path: packet.json
+          retention-days: 14
+          if-no-files-found: error
+
+  wave-2:
+    needs: [synapse-1]
+    name: "Wave 2 / ${{ matrix.node }}"
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        node: [position-00, position-01, position-02, position-03, velocity-00, velocity-01, velocity-02, velocity-03, acceleration-00, acceleration-01, acceleration-02, acceleration-03, curvature-00, curvature-01, curvature-02, curvature-03, stabilizer-00, stabilizer-01, stabilizer-02, stabilizer-03]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: swarm20-input-${{ github.run_id }}
+          path: input
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: swarm20-synapse-1-${{ github.run_id }}
+          path: feedback
+      - name: Second-round feedback from all 19 peers
+        env:
+          NODE: ${{ matrix.node }}
+        run: |
+          mkdir -p packets
+          python -m neural_mesh.swarm20 node --name "$NODE" --stage 2 \
+            --observations input/observation.json --weights input/weights.json \
+            --messages feedback/packet.json --out "packets/node-$NODE.json"
+          echo "Node $NODE ran 19-peer feedback on runner ${RUNNER_NAME}"
+          sleep 75
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: swarm20-r2-${{ matrix.node }}-${{ github.run_id }}
+          path: packets/
+          retention-days: 14
+          if-no-files-found: error
+
+  synapse-2:
+    needs: [wave-2]
+    name: Combine 20 recurrent forecasts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: swarm20-input-${{ github.run_id }}
+          path: input
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: swarm20-synapse-1-${{ github.run_id }}
+          path: previous
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: swarm20-r2-*-${{ github.run_id }}
+          path: receipts
+          merge-multiple: true
+      - run: |
+          python -m neural_mesh.swarm20 integrate --stage 2 \
+            --weights input/weights.json --outputs receipts \
+            --messages previous/packet.json --out packet.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: swarm20-synapse-2-${{ github.run_id }}
+          path: packet.json
+          retention-days: 14
+          if-no-files-found: error
+
+  evaluate:
+    needs: [synapse-2]
+    name: Evaluate 20 specialists against separately sealed target
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: swarm20-input-${{ github.run_id }}
+          path: input
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: swarm20-sealed-${{ github.run_id }}
+          path: sealed
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: swarm20-synapse-1-${{ github.run_id }}
+          path: round1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: swarm20-synapse-2-${{ github.run_id }}
+          path: round2
+      - name: Measure gain or regression without hidden promotion
+        run: |
+          mkdir -p evidence
+          python -m neural_mesh.swarm20 evaluate \
+            --round1 round1/packet.json --round2 round2/packet.json \
+            --truth sealed/truth.json --weights input/weights.json \
+            --out evidence/metrics.json
+          cp round1/packet.json evidence/round1.json
+          cp round2/packet.json evidence/round2.json
+          cat evidence/metrics.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: swarm20-model-evidence-${{ github.run_id }}
+          path: evidence/
+          retention-days: 30
+          if-no-files-found: error
+
+  audit-parallel:
+    needs: [evaluate]
+    name: Audit actual concurrent GitHub runner jobs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      RUN_ID: ${{ github.run_id }}
+    steps:
+      - name: Measure actual overlap from API job timestamps
+        run: |
+          mkdir -p proof
+          python - <<'PY'
+          import datetime, json, os, urllib.request
+          root=os.environ["GITHUB_API_URL"]
+          repo=os.environ["REPOSITORY"]
+          run=os.environ["RUN_ID"]
+          url=f"{root}/repos/{repo}/actions/runs/{run}/jobs?per_page=100"
+          request=urllib.request.Request(url,headers={
+              "Authorization":"Bearer "+os.environ["GH_TOKEN"],
+              "Accept":"application/vnd.github+json",
+              "X-GitHub-Api-Version":"2022-11-28"})
+          with urllib.request.urlopen(request, timeout=25) as response:
+              jobs=json.load(response)["jobs"]
+          def concurrency(prefix):
+              relevant=[j for j in jobs if j["name"].startswith(prefix)]
+              if len(relevant)!=20 or any(j["conclusion"]!="success" for j in relevant):
+                  raise ValueError(f"{prefix}: expected exactly 20 successful job executions")
+              events=[]
+              for j in relevant:
+                  def date(x):
+                      return datetime.datetime.fromisoformat(x.replace("Z","+00:00"))
+                  events.extend([(date(j["started_at"]),1),
+                                 (date(j["completed_at"]),-1)])
+              # Jobs ending at a timestamp don't overlap jobs starting then.
+              events.sort(key=lambda x:(x[0],x[1]))
+              active=peak=0
+              for _,direction in events:
+                  active+=direction
+                  peak=max(peak,active)
+              return {"job_count":len(relevant),"peak_simultaneous":peak,
+                      "all_unique_job_ids":len({j["id"] for j in relevant})==20,
+                      "job_ids":[j["id"] for j in relevant]}
+          report={"schema":"neuralmesh-runner-concurrency-v1",
+                  "run_id":int(run),
+                  "requested_parallel_workers_per_wave":20,
+                  "wave1":concurrency("Wave 1 / "),
+                  "wave2":concurrency("Wave 2 / ")}
+          report["full_20_simultaneous_confirmed"]=all(
+              report[k]["peak_simultaneous"]==20 for k in ("wave1","wave2"))
+          with open("proof/concurrency.json","w") as f:
+              json.dump(report,f,indent=2,sort_keys=True)
+          print(json.dumps(report,indent=2))
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: swarm20-concurrency-evidence-${{ github.run_id }}
+          path: proof/concurrency.json
+          retention-days: 30
+          if-no-files-found: error
+      - name: Fail if all 20 runners were not genuinely simultaneous
+        run: |
+          python - <<'PY'
+          import json
+          data=json.load(open("proof/concurrency.json"))
+          assert data["full_20_simultaneous_confirmed"], (
+              "20 jobs were launched per wave but did NOT overlap 20-at-once. "
+              "Check account-level concurrency capacity or competing runs.")
+          print("CONFIRMED: 20 different runner jobs overlapped in each wave")
+          PY

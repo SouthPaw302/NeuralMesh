@@ -7,6 +7,15 @@
 
 An experimental distributed neural mesh built on GitHub Actions.
 
+## Active 20-runner execution
+
+**New:** [20 parallel GitHub-hosted workers, twice](docs/TWENTY_PARALLEL_RUNNERS.md). This experiment uses **20 independently trained specialists** across two consecutive waves of **20 actual runner jobs each**, with `max-parallel: 20` and 19 directed peer messages per worker. The `audit-parallel` job checks the **observed** peak simultaneous runner count in each wave and fails if fewer than 20 overlapped. The new pipeline is **Actions → NeuralMesh 20 Parallel Runners**, not the six-worker legacy workflow.
+
+This verifies distributed execution, not automatic model intelligence improvements. All historical six-node research and its science acceptance rules remain unchanged.
+
+**Verified [first 20-runner results](docs/TWENTY_PARALLEL_RESULTS.md):** Wave 1 and Wave 2 both achieved **20 genuinely overlapping GitHub jobs**, all 40 worker job executions passed, and the final timestamp audit passed. Round-2 feedback modestly improved consensus MSE but did not beat the strongest specialist. No weights were promoted.
+
+
 **Status: v0 reproducible research prototype.** Six independent learned numerical specialist modules predict motion from different noisy observations. GitHub-hosted workers exchange vector predictions through two rounds of directed, weighted feedback. A final evaluator measures whether the collective improves on the best standalone node.
 
 This is **not** a simulated biological brain, a consciousness model, distributed training of a large neural network, or evidence of superior collective intelligence. GitHub Actions artifacts are a high-latency message bus, not a low-latency tensor transport.
@@ -29,7 +38,7 @@ This is **not** a simulated biological brain, a consciousness model, distributed
  metrics.json + candidate-checkpoint.json
 ```
 
-At most six specialist runners are active in parallel, with twelve specialist job executions across two sequential rounds. State is durable within one workflow through artifacts, not yet across workflows.
+The historical six-node workflow uses at most six workers in parallel. The **new** 20-node workflow launches twenty per wave (forty separate worker job executions), measures actual runner overlap, and preserves its snapshots as workflow artifacts; no model is automatically promoted.
 
 ## Quick start
 
@@ -42,9 +51,9 @@ python -m neural_mesh.mesh local-proof --state /tmp/mesh --out /tmp/proof
 cat /tmp/proof/metrics.json
 ```
 
-## Running the GitHub swarm
+## Running the original six-runner proof (legacy)
 
-Open **Actions → NeuralMesh Distributed Proof → Run workflow**. The full six-runner experiment launches **only by manual dispatch**; a normal push or pull request runs tests without allocating the twelve specialist jobs.
+Open **Actions → NeuralMesh Distributed Proof → Run workflow**. The legacy six-runner experiment launches **only by manual dispatch**; a normal push or pull request runs tests without allocating the twelve specialist jobs.
 
 After the run, download `mesh-evidence-<run_id>`. Its `metrics.json` records best-individual, first-round, and feedback-round mean squared errors; the remaining files contain both synaptic packets and a candidate adaptive checkpoint.
 
