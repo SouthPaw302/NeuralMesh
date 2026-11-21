@@ -75,3 +75,12 @@ The restore workflow `.github/workflows/sparse20-restore-proof.yml` independentl
 Do not add another corrective safety layer just because this experiment failed. Preserve its independent controls and model snapshots. A future distinct experiment would need to establish, with a new stream and new untouched holdouts, whether a *trained student-teacher objective with uncertainty calibration* is more appropriate than directly averaging world-coordinate forecasts.
 
 If involving compact pretrained language/vision/embedding models (e.g. MiniLM, Gemma, LFM2), implement a separate compatible encoder interface and representation-alignment experiment. They are **not already deployed** by this numerical testbed.
+
+
+## Independent cross-run state restoration — verified
+
+A separate [GitHub Actions run 44880486740](https://github.com/SouthPaw302/NeuralMesh/actions/runs/44880486740) **completed successfully**. It downloaded the prior run's serialized checkpoint through GitHub's cross-run artifact API, verified its digest and exactly twenty model identities, generated a new learning-stream configuration `seed=810248`, confirmed `generation=2`, then independently initialized and trained each node from its **actual saved parameters**.
+
+All 20 restored initial weight hashes matched the earlier checkpoint and all 20 local models changed during new training. The evidence is attached as `sparse20-durable-state-proof-44880486740`.
+
+This proves checkpoint reuse across separate Actions runs. It **does not** validate or promote the earlier candidate's learning quality, which remains scientifically rejected.
