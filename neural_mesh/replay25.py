@@ -325,6 +325,55 @@ def evaluate(parent_path,candidate_path,decision_path,id_sets,ood_sets,out):
     return result
 
 
+
+def check_promotion(parent_file, candidate_file, decision_file, report_file, gate_file):
+    """Fail-closed independent-six-set gate for a human-reviewed registry PR.
+
+    Unlike legacy Phase 2.5, mere bounded regression is NOT promotable.
+    """
+    parent=phase24.restore_memory(parent_file)
+    candidate=phase24.restore_memory(candidate_file)
+    decision=mesh.load(decision_file)
+    report=mesh.load(report_file)
+    gate=mesh.load(gate_file)
+    if (parent["sha256"]!=phase25.PARENT_SHA or
+        decision.get("schema")!=SCHEMA or report.get("schema")!=SCHEMA or
+        gate.get("schema")!=SCHEMA):
+        raise ValueError("unsupported memory promotion evidence")
+    if (not decision.get("validation_pass") or
+        decision.get("candidate_is_parent") is not False or
+        candidate["sha256"]==parent["sha256"] or
+        candidate["payload"].get("parent_sha256")!=parent["sha256"]):
+        raise ValueError("no verified adapted memory candidate")
+    if not (report.get("status")=="PROMOTION_ELIGIBLE" and
+            gate.get("status")=="PROMOTION_ELIGIBLE" and
+            report.get("summary",{}).get("passes_predeclared_gate") is True and
+            report.get("manual_promotion_required") is True and
+            gate.get("manual_review_required") is True):
+        raise ValueError("cross-seed promotion gate is closed")
+    if (decision.get("candidate_sha256")!=candidate["sha256"] or
+        report.get("candidate_sha256")!=candidate["sha256"] or
+        gate.get("candidate_sha256")!=candidate["sha256"] or
+        decision.get("parent_sha256")!=parent["sha256"] or
+        report.get("parent_sha256")!=parent["sha256"] or
+        gate.get("parent_sha256")!=parent["sha256"] or
+        report.get("decision_sha256")!=mesh.digest(decision) or
+        gate.get("evaluation_sha256")!=mesh.digest(report)):
+        raise ValueError("candidate lineage or test evidence digest mismatch")
+    entries=report.get("evaluations",[])
+    if (len(entries)<6 or
+        sum(x.get("kind")=="id" for x in entries)<3 or
+        sum(x.get("kind")=="ood" for x in entries)<3 or
+        len(set((x.get("kind"),x.get("dataset_id")) for x in entries))!=len(entries)):
+        raise ValueError("insufficient independent unseen datasets")
+    status,summary=_judgement(entries,decision)
+    if status!="PROMOTION_ELIGIBLE" or summary!=report["summary"]:
+        raise ValueError("independent generalization check failed")
+    return {"schema":SCHEMA,"parent":parent["sha256"],
+            "candidate":candidate["sha256"],"evaluation":mesh.digest(report),
+            "status":"CHECKED_FOR_MANUAL_PR_ONLY"}
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     sub=p.add_subparsers(dest="command",required=True)
