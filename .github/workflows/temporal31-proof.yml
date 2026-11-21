@@ -1,0 +1,211 @@
+name: NeuralMesh 2.7 - Six-Frame Temporal Generalization
+
+on:
+  push:
+    branches: [research/2.7-temporal-observability]
+    paths: [.github/workflows/temporal31-proof.yml]
+  pull_request:
+    paths:
+      - neural_mesh/**
+      - tests/**
+      - .github/workflows/temporal31-proof.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: temporal31-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+      - name: Run all learning, lineage and true six-frame tests
+        run: |
+          python -m unittest discover -s tests -p 'test_*.py' -v
+          python -m neural_mesh.temporal31 prepare --help
+          python -m neural_mesh.temporal31 train --help
+          python -m neural_mesh.temporal31 evaluate --help
+
+  prepare:
+    if: github.event_name != 'pull_request'
+    needs: [tests]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Generate six-frame learning, validation and nine disjoint held-out cohorts
+        run: |
+          python -m neural_mesh.temporal31 prepare --seed 31211 \
+            --regimes linear,accelerating,jerk,turning,bounce,swirl \
+            --count 768 --out training
+          python -m neural_mesh.temporal31 prepare --seed 31212 \
+            --regimes linear,accelerating,jerk,turning,bounce,swirl \
+            --count 192 --out validation
+          for seed in 31221 31222 31223; do
+            python -m neural_mesh.temporal31 prepare --seed "$seed" \
+              --regimes linear,accelerating,jerk,turning --count 256 \
+              --out "id/$seed"
+          done
+          for seed in 51221 51222 51223; do
+            python -m neural_mesh.temporal31 prepare --seed "$seed" \
+              --regimes bounce,swirl --count 128 --out "known/$seed"
+          done
+          for seed in 51231 51232 51233; do
+            python -m neural_mesh.temporal31 prepare --seed "$seed" \
+              --regimes stop_start,late_impulse --count 128 \
+              --out "unseen/$seed"
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: t31-training-${{ github.run_id }}
+          path: |
+            training/public.json
+            training/targets.json
+            validation/public.json
+            validation/targets.json
+          retention-days: 14
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: t31-test-public-${{ github.run_id }}
+          path: |
+            id/*/public.json
+            known/*/public.json
+            unseen/*/public.json
+          retention-days: 14
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: t31-test-sealed-${{ github.run_id }}
+          path: |
+            id/*/targets.json
+            known/*/targets.json
+            unseen/*/targets.json
+          retention-days: 14
+          if-no-files-found: error
+
+  fit:
+    needs: [prepare]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Retrieve exact original parent model and physics adapter
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: transfer26-frozen-adapter-44873535607
+          run-id: 44873535607
+          github-token: ${{ github.token }}
+          path: original
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: t31-training-${{ github.run_id }}
+          path: data
+      - name: Compare four-versus-six-frame observable competence and fit safe trust
+        run: |
+          mkdir -p frozen
+          python -m neural_mesh.temporal31 train \
+            --parent original/parent.json --adapter original/adapter.json \
+            --train-public data/training/public.json \
+            --train-targets data/training/targets.json \
+            --val-public data/validation/public.json \
+            --val-targets data/validation/targets.json --out frozen
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: t31-frozen-policy-${{ github.run_id }}
+          path: frozen/
+          retention-days: 30
+          if-no-files-found: error
+
+  evaluate-sealed:
+    needs: [fit]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: t31-frozen-policy-${{ github.run_id }}
+          path: frozen
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: t31-test-public-${{ github.run_id }}
+          path: sealed
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: t31-test-sealed-${{ github.run_id }}
+          path: sealed
+      - name: Score nine brand-new test seeds without modifying parent
+        run: |
+          mkdir -p evidence
+          python -m neural_mesh.temporal31 evaluate \
+            --parent frozen/parent.json --adapter frozen/adapter.json \
+            --temporal frozen/temporal.json \
+            --decision frozen/training-decision.json \
+            --id-set sealed/id/31221/public.json,sealed/id/31221/targets.json \
+            --id-set sealed/id/31222/public.json,sealed/id/31222/targets.json \
+            --id-set sealed/id/31223/public.json,sealed/id/31223/targets.json \
+            --known-set sealed/known/51221/public.json,sealed/known/51221/targets.json \
+            --known-set sealed/known/51222/public.json,sealed/known/51222/targets.json \
+            --known-set sealed/known/51223/public.json,sealed/known/51223/targets.json \
+            --unseen-set sealed/unseen/51231/public.json,sealed/unseen/51231/targets.json \
+            --unseen-set sealed/unseen/51232/public.json,sealed/unseen/51232/targets.json \
+            --unseen-set sealed/unseen/51233/public.json,sealed/unseen/51233/targets.json \
+            --out evidence
+          cp frozen/temporal.json frozen/training-decision.json evidence/
+          {
+            echo "### Six-frame motion memory evaluation"
+            echo "Original four-frame model receives last four observations; temporal gate may use six."
+            echo "Familiar, known-new and never-trained motion measured on identical targets."
+            echo "No model or memory checkpoint is automatically promoted."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: t31-evidence-${{ github.run_id }}
+          path: evidence/
+          retention-days: 30
+          if-no-files-found: error
+
+  scientific-acceptance:
+    needs: [evaluate-sealed]
+    name: Scientific gate (red if cross-domain retention unproven)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: t31-evidence-${{ github.run_id }}
+          path: evidence
+      - name: Require genuinely better old-skill and novel transfer before promotion
+        run: |
+          python - <<'PY'
+          from neural_mesh import mesh
+          report=mesh.load("evidence/evaluation.json")
+          assert report["status"]=="SIX_FRAME_RETENTION_SUPPORTED", (
+              "LEARNING_NOT_ACCEPTED: "+report["status"])
+          assert report["id_retention_pass"]
+          assert report["known_transfer_pass"]
+          assert report["unseen_transfer_pass"]
+          assert report["fault_safety_pass"]
+          print("Model meets original scientific acceptance, human review still required")
+          PY
