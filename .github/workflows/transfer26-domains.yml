@@ -1,0 +1,188 @@
+name: NeuralMesh 2.6 - Cross-Domain Transfer Without Forgetting
+
+on:
+  push:
+    branches: [research/2.6-cross-domain-physics-experts]
+    paths: [.github/workflows/transfer26-domains.yml]
+  pull_request:
+    paths:
+      - neural_mesh/**
+      - tests/**
+      - .github/workflows/transfer26-domains.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: p26-domain-transfer-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+      - name: Run complete protocol and domain-isolation regression suite
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+
+  prepare:
+    if: github.event_name != 'pull_request'
+    needs: [unit-tests]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Prepare replay, new learning, exposed physics, and entirely sealed tests
+        run: |
+          python -m neural_mesh.phase2 prepare --seed 64013 \
+            --train-count 512 --validation-count 128 --test-count 16 --out replay
+          python -m neural_mesh.phase2 prepare --seed 26111 \
+            --train-count 512 --validation-count 128 --test-count 16 --out fresh
+          python -m neural_mesh.transfer26 subset --seed 46111 --count 256 \
+            --regimes bounce,swirl --out known-train
+          python -m neural_mesh.transfer26 subset --seed 46112 --count 128 \
+            --regimes bounce,swirl --out known-val
+          for seed in 26121 26122 26123; do
+            python -m neural_mesh.phase2 prepare --seed "$seed" \
+              --train-count 4 --validation-count 4 --test-count 256 --out "id/$seed"
+          done
+          for seed in 46121 46122 46123; do
+            python -m neural_mesh.transfer26 subset --seed "$seed" --count 128 \
+              --regimes bounce,swirl --out "known/$seed"
+          done
+          for seed in 46131 46132 46133; do
+            python -m neural_mesh.transfer26 subset --seed "$seed" --count 128 \
+              --regimes stop_start,late_impulse --out "unseen/$seed"
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: transfer26-training-${{ github.run_id }}
+          path: |
+            replay/public.json
+            replay/trainval-labels.json
+            fresh/public.json
+            fresh/trainval-labels.json
+            known-train/public.json
+            known-train/targets.json
+            known-val/public.json
+            known-val/targets.json
+          retention-days: 14
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: transfer26-holdout-public-${{ github.run_id }}
+          path: |
+            id/*/public.json
+            known/*/public.json
+            unseen/*/public.json
+          retention-days: 14
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: transfer26-sealed-labels-${{ github.run_id }}
+          path: |
+            id/*/test-labels.json
+            known/*/targets.json
+            unseen/*/targets.json
+          retention-days: 14
+          if-no-files-found: error
+
+  train-physics:
+    needs: [prepare]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: p24-memory-44871190473
+          run-id: 44871190473
+          github-token: ${{ github.token }}
+          path: memory
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: transfer26-training-${{ github.run_id }}
+          path: training
+      - name: Fit motion specialists only on known train and validation domains
+        run: |
+          mkdir -p frozen
+          python -m neural_mesh.transfer26 train \
+            --parent memory/checkpoint.json \
+            --replay-public training/replay/public.json \
+            --replay-labels training/replay/trainval-labels.json \
+            --fresh-public training/fresh/public.json \
+            --fresh-labels training/fresh/trainval-labels.json \
+            --ood-train-public training/known-train/public.json \
+            --ood-train-labels training/known-train/targets.json \
+            --ood-val-public training/known-val/public.json \
+            --ood-val-labels training/known-val/targets.json \
+            --out frozen
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: transfer26-frozen-adapter-${{ github.run_id }}
+          path: frozen/
+          retention-days: 30
+          if-no-files-found: error
+
+  evaluate-blind:
+    needs: [train-physics]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: transfer26-frozen-adapter-${{ github.run_id }}
+          path: frozen
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: transfer26-holdout-public-${{ github.run_id }}
+          path: test
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: transfer26-sealed-labels-${{ github.run_id }}
+          path: test
+      - name: Compare parent and frozen expert gate across 9 blind cohorts
+        run: |
+          mkdir -p evidence
+          python -m neural_mesh.transfer26 evaluate \
+            --parent frozen/parent.json \
+            --adapter frozen/adapter.json \
+            --decision frozen/decision.json \
+            --id-set test/id/26121/public.json,test/id/26121/test-labels.json \
+            --id-set test/id/26122/public.json,test/id/26122/test-labels.json \
+            --id-set test/id/26123/public.json,test/id/26123/test-labels.json \
+            --known-set test/known/46121/public.json,test/known/46121/targets.json \
+            --known-set test/known/46122/public.json,test/known/46122/targets.json \
+            --known-set test/known/46123/public.json,test/known/46123/targets.json \
+            --unseen-set test/unseen/46131/public.json,test/unseen/46131/targets.json \
+            --unseen-set test/unseen/46132/public.json,test/unseen/46132/targets.json \
+            --unseen-set test/unseen/46133/public.json,test/unseen/46133/targets.json \
+            --out evidence
+          cp frozen/decision.json frozen/adapter.json evidence/
+          {
+            echo "### Phase 2.6 — cross-domain transfer, not infra"
+            echo "Three independent ID, three known-OOD, and three zero-shot unseen-family datasets."
+            echo "An improvement on exposed novel physics alone is NOT enough."
+            echo "No memory updated. Check status and all per-regime/regression losses."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: transfer26-evidence-${{ github.run_id }}
+          path: evidence/
+          retention-days: 30
+          if-no-files-found: error
