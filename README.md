@@ -101,6 +101,12 @@ The first Phase 2.5 updater optimized a different residual than the **actual dep
 
 [First measured repair result](docs/phase-2.5-repair-results.md): **0.97% lower error on ordinary motion** across three new seeds, but **0.25% higher error on novel motion**, so **promotion is correctly BLOCKED**. Original memory remains unchanged. Manual registry promotion only accepts the repaired six-set evidence and requires a separate human-reviewed PR.
 
+## Phase 2.6 — Cross-Domain Physics Transfer
+
+The mesh now combines its frozen six-node forecast with four interpretable physics experts, selected by a learned observation-dependent softmax gate. The [Phase 2.6 protocol](docs/phase-2.6.md) introduced bounce and swirl during training, while keeping stop/start and late impulse completely unseen.
+
+The [first nine-seed held-out results](docs/phase-2.6-results.md) improved mean error **1.9% on familiar motion**, **20.4% on newly trained motion families**, and **2.9% on never-trained motion families**. All nine independent test seeds improved in aggregate; **familiar linear motion worsened by 5.5%**, so retention across every capability remains unproven. No model memory was auto-promoted.
+
 ## Direction
 
 The next experiments should measure multi-scene generalization and train routing weights over held-out examples; then introduce real video-derived features, versioned persistent state, and eventually alternative transport for lower-latency neural communication.
