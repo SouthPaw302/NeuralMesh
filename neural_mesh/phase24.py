@@ -230,8 +230,14 @@ def restore_memory(path):
     if set(wrapper) != {"payload", "sha256"}:
         raise ValueError("unknown checkpoint wrapper")
     payload = wrapper["payload"]
-    if payload.get("schema") != MEMORY_SCHEMA or payload.get("version") != 1:
+    if payload.get("schema") != MEMORY_SCHEMA or payload.get("version") not in (1, 2):
         raise ValueError("incompatible memory format")
+    if payload["version"] == 2:
+        if (payload.get("generation") != 2 or
+            not isinstance(payload.get("parent_sha256"), str) or
+            len(payload["parent_sha256"]) != 64 or
+            payload.get("registry_status") != "candidate"):
+            raise ValueError("invalid evolved memory lineage")
     if wrapper["sha256"] != mesh.digest(payload):
         raise ValueError("memory digest mismatch")
     if payload["models"].get("config_sha256") != payload["config_sha256"]:
