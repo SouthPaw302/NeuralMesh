@@ -71,6 +71,12 @@ The Phase 2.1 implementation adds a **512 training / 128 validation / 256 held-o
 
 Read [the experiment protocol](docs/phase-2.1.md) and launch **NeuralMesh Phase 2.1 - Held-out Plasticity Benchmark** from GitHub Actions after review. Its first branch-scoped experiment is recorded in Actions. Existing Phase 1 functionality is retained.
 
+## Phase 2.2 — Contextual synapses
+
+Phase 2.2 tests **scene-dependent node attention** and a learned **peer-embedding feedback residual** over a fresh 512/128/256 synthetic train/validation/test split. It includes independently benchmarked static routing and no-feedback ablations. The fitted router can turn off feedback if validation rejects it.
+
+See [Phase 2.2 experiment protocol](docs/phase-2.2.md). The workflow runs six observation workers, learns connection weights from training/validation only, then runs six feedback workers before independently scoring sealed test data. No result is auto-promoted.
+
 ## Direction
 
 The next experiments should measure multi-scene generalization and train routing weights over held-out examples; then introduce real video-derived features, versioned persistent state, and eventually alternative transport for lower-latency neural communication.
