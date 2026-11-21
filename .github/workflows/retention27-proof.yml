@@ -33,6 +33,10 @@ jobs:
           python-version: '3.11'
       - name: Run all real tests
         run: python -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Verify train and evaluate CLI entrypoints
+        run: |
+          python -m neural_mesh.safety27 train --help
+          python -m neural_mesh.safety27 evaluate --help
 
   prepare:
     if: github.event_name != 'pull_request'
