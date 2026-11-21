@@ -152,13 +152,20 @@ class CrossDomainTransferTests(unittest.TestCase):
                         root/"tampered.json",self.proposal/"decision.json",
                         idsets,known,unknown,root/"bad")
 
-    def test_no_improvement_is_not_counted_as_transfer(self):
-        parent={"mse":.1,"faults":{f:.1 for f in transfer26.FAULTS}}
-        base=[{"category":cat,"parent":parent,"adapter":copy.deepcopy(parent)}
-              for cat in ("id","known","unseen")]
-        self.assertTrue(all(x["parent"]["mse"]==x["adapter"]["mse"] for x in base))
-        # A parent fallback is legitimate but cannot be called cross-domain learning.
-        assert not (False and True)
+    def test_parent_fallback_and_normalized_expert_gating(self):
+        scene=mesh.load(self.domain_train/"public.json")["scenes"][0]
+        example=transfer26._example(scene,[0.,0.],self.parent["payload"],
+                                    "missing",0,"ood")
+        parent=transfer26.predict_example(example,None)
+        neutral={"theta":[[0.]*transfer26.FEATURE_DIM for _ in transfer26.EXPERTS],
+                 "means":[0.]*transfer26.FEATURE_DIM,
+                 "scales":[1.]*transfer26.FEATURE_DIM,
+                 "strength":0.}
+        self.assertEqual(parent,transfer26.predict_example(example,neutral))
+        att=transfer26._weights(neutral["theta"],example["features"],
+                                neutral["means"],neutral["scales"])
+        self.assertAlmostEqual(sum(att),1.)
+        self.assertTrue(all(x>=0 for x in att))
 
 
 if __name__=="__main__":
