@@ -13,6 +13,8 @@ An experimental distributed neural mesh built on GitHub Actions.
 
 This verifies distributed execution, not automatic model intelligence improvements. All historical six-node research and its science acceptance rules remain unchanged.
 
+**Verified [first 20-runner results](docs/TWENTY_PARALLEL_RESULTS.md):** Wave 1 and Wave 2 both achieved **20 genuinely overlapping GitHub jobs**, all 40 worker job executions passed, and the final timestamp audit passed. Round-2 feedback modestly improved consensus MSE but did not beat the strongest specialist. No weights were promoted.
+
 
 **Status: v0 reproducible research prototype.** Six independent learned numerical specialist modules predict motion from different noisy observations. GitHub-hosted workers exchange vector predictions through two rounds of directed, weighted feedback. A final evaluator measures whether the collective improves on the best standalone node.
 
