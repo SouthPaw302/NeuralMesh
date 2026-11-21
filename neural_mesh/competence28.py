@@ -112,7 +112,17 @@ def _leaf_trust(features,tree):
 def trust(ex,policy):
     if policy is None:
         return 0.
-    value=policy["scale"]*_leaf_trust(ex["features"],policy["tree"])
+    if policy.get("kind")=="curvature_risk":
+        # Infer possible turning only from observed kinematics. NEVER read
+        # the supplied true regime name or any target coordinate here.
+        angle=abs(ex["features"][3])
+        acceleration=max(0.,ex["features"][2])
+        risk=angle/(0.05+acceleration)
+        guarded=(policy["low"]<=angle<=policy["high"] and
+                 risk>=policy["risk_threshold"])
+        value=policy["veto_trust"] if guarded else policy["scale"]
+    else:
+        value=policy["scale"]*_leaf_trust(ex["features"],policy["tree"])
     return max(0.,min(1.,value))
 
 
@@ -194,6 +204,33 @@ def train(parent_path,adapter_path,id_public,id_trainval,
                                     "eligible":safe})
                     if safe and (winner is None or value<winner[0]):
                         winner=(value,policy,id_score,known_score)
+    # The first fitted tree search showed a constant trust policy on
+    # validation. Explicitly evaluate predeclared observed-curvature risk
+    # guards; these are never conditional on test set or a true regime label.
+    for low in (0.,.06,.13):
+        for high in (.30,.45,.65,.85):
+            for ratio in (0.,1.,2.,3.,4.):
+                for veto in (0.,.20):
+                    for scale in (.75,1.):
+                        policy={"kind":"curvature_risk","low":low,
+                                "high":high,"risk_threshold":ratio,
+                                "veto_trust":veto,"scale":scale}
+                        id_score=_score(val_id,policy)
+                        known_score=_score(val_known,policy)
+                        safe=safety27._validation_safe(
+                            parent_id,id_score,parent_known,known_score)
+                        value=(id_score["mse"]/parent_id["mse"]+
+                               known_score["mse"]/parent_known["mse"])
+                        results.append({"kind":"curvature_risk","low":low,
+                                        "high":high,"risk_threshold":ratio,
+                                        "veto_trust":veto,"scale":scale,
+                                        "id_mse":id_score["mse"],
+                                        "known_mse":known_score["mse"],
+                                        "linear_mse":id_score["regimes"]["linear"],
+                                        "turning_mse":id_score["regimes"]["turning"],
+                                        "eligible":safe})
+                        if safe and (winner is None or value<winner[0]):
+                            winner=(value,policy,id_score,known_score)
     payload={"schema":SCHEMA,"parent_sha256":parent["sha256"],
              "adapter_sha256":adapter["sha256"],
              "policy":winner[1] if winner else None,
