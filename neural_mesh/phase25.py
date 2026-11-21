@@ -274,6 +274,13 @@ def evaluate_candidate(parent_file, candidate_file, decision_file, new_public_fi
 
 
 def check_promotion(parent_file,candidate_file,decision_file,report_file,gate_file):
+    """Reject legacy one-seed promotion; delegate to repaired cross-seed gate."""
+    decision=mesh.load(decision_file)
+    from neural_mesh import replay25
+    if decision.get("schema")==replay25.SCHEMA:
+        return replay25.check_promotion(parent_file,candidate_file,decision_file,
+                                        report_file,gate_file)
+    raise ValueError("legacy single-seed memory promotion is revoked; use replay25")
     parent=phase24.restore_memory(parent_file)
     candidate=phase24.restore_memory(candidate_file)
     decision=mesh.load(decision_file)
