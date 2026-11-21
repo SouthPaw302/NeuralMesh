@@ -274,31 +274,13 @@ def evaluate_candidate(parent_file, candidate_file, decision_file, new_public_fi
 
 
 def check_promotion(parent_file,candidate_file,decision_file,report_file,gate_file):
-    parent=phase24.restore_memory(parent_file)
-    candidate=phase24.restore_memory(candidate_file)
+    """Reject legacy one-seed promotion; delegate to repaired cross-seed gate."""
     decision=mesh.load(decision_file)
-    report=mesh.load(report_file)
-    gate=mesh.load(gate_file)
-    if (gate.get("schema")!=SCHEMA or gate.get("status")!="PROMOTION_ELIGIBLE" or
-        report.get("schema")!=SCHEMA or report.get("status")!="PROMOTION_ELIGIBLE" or
-        decision.get("validation_pass") is not True or
-        gate.get("manual_review_required") is not True or
-        gate.get("test_metrics_frozen") is not True):
-        raise ValueError("promotion gate is closed")
-    if parent["sha256"]!=PARENT_SHA or candidate["sha256"]==parent["sha256"]:
-        raise ValueError("invalid promoted lineage")
-    if candidate["payload"].get("parent_sha256")!=parent["sha256"]:
-        raise ValueError("broken chain")
-    if gate.get("evaluation_sha256")!=mesh.digest(report):
-        raise ValueError("evaluation digest mismatch")
-    for field in ("parent_sha256","candidate_sha256"):
-        if any(d.get(field)!= (parent["sha256"] if field=="parent_sha256" else candidate["sha256"])
-               for d in (gate,report,decision)):
-            raise ValueError("candidate/evidence hash mismatch")
-    if not report["indistribution_guard_pass"] or not report["ood_guard_pass"]:
-        raise ValueError("regression guard failed")
-    return {"schema":SCHEMA,"parent":parent["sha256"],"candidate":candidate["sha256"],
-            "evaluation":mesh.digest(report),"status":"CHECKED_FOR_MANUAL_PR_ONLY"}
+    from neural_mesh import replay25
+    if decision.get("schema")==replay25.SCHEMA:
+        return replay25.check_promotion(parent_file,candidate_file,decision_file,
+                                        report_file,gate_file)
+    raise ValueError("legacy single-seed memory promotion is revoked; use replay25")
 
 
 def main():

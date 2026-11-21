@@ -92,7 +92,7 @@ class NeuralMemoryEvolutionTests(unittest.TestCase):
         report["candidate_mse"]["none"]=1.05
         self.assertFalse(phase25._suite_guard(report,.04,.15))
 
-    def test_manual_gate_cannot_be_forged_by_single_file(self):
+    def test_legacy_single_split_promotion_is_revoked(self):
         with tempfile.TemporaryDirectory() as tmp:
             loc=Path(tmp)
             if self.decision["validation_pass"]:
@@ -111,7 +111,7 @@ class NeuralMemoryEvolutionTests(unittest.TestCase):
                     "parent_sha256":self.parent["sha256"],
                     "candidate_sha256":candidate["sha256"],
                     "indistribution_guard_pass":True,"ood_guard_pass":True}
-            gate={"schema":phase25.SCHEMA,"status":"BLOCKED_REGRESSION",
+            gate={"schema":phase25.SCHEMA,"status":"PROMOTION_ELIGIBLE",
                   "parent_sha256":self.parent["sha256"],"candidate_sha256":candidate["sha256"],
                   "evaluation_sha256":mesh.digest(report),"manual_review_required":True,
                   "test_metrics_frozen":True}
@@ -119,19 +119,7 @@ class NeuralMemoryEvolutionTests(unittest.TestCase):
                                      ("report.json",report),("gate.json",gate)):
                 mesh.save(loc/filename,object_)
             with patch.object(phase25,"PARENT_SHA",self.parent["sha256"]):
-                with self.assertRaisesRegex(ValueError,"promotion gate is closed"):
-                    phase25.check_promotion(
-                        loc/"parent.json",loc/"candidate.json",
-                        loc/"decision.json",loc/"report.json",loc/"gate.json")
-                gate["status"]="PROMOTION_ELIGIBLE"
-                mesh.save(loc/"gate.json",gate)
-                result=phase25.check_promotion(
-                    loc/"parent.json",loc/"candidate.json",
-                    loc/"decision.json",loc/"report.json",loc/"gate.json")
-                self.assertEqual(result["status"],"CHECKED_FOR_MANUAL_PR_ONLY")
-                report["ood_guard_pass"]=False
-                mesh.save(loc/"report.json",report)
-                with self.assertRaisesRegex(ValueError,"evaluation digest mismatch"):
+                with self.assertRaisesRegex(ValueError,"legacy single-seed"):
                     phase25.check_promotion(
                         loc/"parent.json",loc/"candidate.json",
                         loc/"decision.json",loc/"report.json",loc/"gate.json")

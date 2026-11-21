@@ -95,6 +95,12 @@ The first evolving memory checkpoint was trained from fresh synthetic data while
 
 **Scientific result:** the candidate improves fresh validation but slightly worsens healthy-node and novel-motion held-out predictions. The [measured evidence](docs/phase-2.5-results.md) recommends retaining the parent rather than promoting this candidate automatically. The experimental Git memory registry remains uncommitted pending human review.
 
+## Phase 2.5 repair — historical rehearsal and rigorous generalization
+
+The first Phase 2.5 updater optimized a different residual than the **actual deployed fault-aware predictor** uses. [The repaired learner](docs/phase-2.5-repair.md) fits the exact deployed equation under clean/missing/corrupt conditions, rehearses earlier training cohorts, and tests across **three independently seeded ordinary-motion and three novel-motion held-out sets**. A stronger promotion gate now rejects regressions that the old single-seed gate tolerated.
+
+[First measured repair result](docs/phase-2.5-repair-results.md): **0.97% lower error on ordinary motion** across three new seeds, but **0.25% higher error on novel motion**, so **promotion is correctly BLOCKED**. Original memory remains unchanged. Manual registry promotion only accepts the repaired six-set evidence and requires a separate human-reviewed PR.
+
 ## Direction
 
 The next experiments should measure multi-scene generalization and train routing weights over held-out examples; then introduce real video-derived features, versioned persistent state, and eventually alternative transport for lower-latency neural communication.

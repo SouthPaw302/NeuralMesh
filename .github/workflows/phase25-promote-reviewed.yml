@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       evidence_run_id:
-        description: Successful Phase 2.5 experiment workflow run ID
+        description: Successful repaired six-set learning experiment workflow run ID
         type: string
         required: true
       expected_candidate_sha256:
@@ -49,12 +49,12 @@ jobs:
           data=json.load(open("source-run.json"))
           assert data.get("conclusion")=="success", "source experiment did not pass"
           assert data.get("head_repository",{}).get("full_name")==os.environ["GITHUB_REPOSITORY"], "wrong repo"
-          assert data.get("path")==".github/workflows/phase25-evolution.yml", "unexpected source workflow"
+          assert data.get("path")==".github/workflows/repair25-replay.yml", "unexpected source workflow"
           print("Source experimental run verified:",data["id"])
           PY
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: phase25-review-${{ inputs.evidence_run_id }}
+          name: replay25-evidence-${{ inputs.evidence_run_id }}
           run-id: ${{ inputs.evidence_run_id }}
           github-token: ${{ github.token }}
           path: reviewed
@@ -62,7 +62,7 @@ jobs:
         run: |
           python -m neural_mesh.phase25 check-promotion \
             --parent reviewed/parent.json --candidate reviewed/candidate.json \
-            --decision reviewed/training-decision.json \
+            --decision reviewed/decision.json \
             --report reviewed/evaluation.json --gate reviewed/promotion-gate.json
           python - <<'PY'
           import os
@@ -78,7 +78,7 @@ jobs:
           git switch -c "$BRANCH"
           python -m neural_mesh.registry \
             --parent reviewed/parent.json --candidate reviewed/candidate.json \
-            --decision reviewed/training-decision.json \
+            --decision reviewed/decision.json \
             --evaluation reviewed/evaluation.json --gate reviewed/promotion-gate.json \
             --registry-root memory/registry --source-run "$EVIDENCE_RUN"
           git config user.name "github-actions[bot]"
@@ -89,5 +89,5 @@ jobs:
           git push --set-upstream origin "$BRANCH"
           gh pr create --base main --head "$BRANCH" \
             --title "Memory registry: review candidate ${EXPECTED_SHA:0:16}" \
-            --body "This PR proposes a Git-backed immutable memory checkpoint from Phase 2.5 run $EVIDENCE_RUN. Parent, candidate and sealed evaluation digests were verified. **Nothing is auto-promoted.** The active pointer changes only if a person reviews and merges this PR. Candidate digest: $EXPECTED_SHA."
+            --body "This PR proposes a replay-trained memory candidate that passed six independently sealed benchmark datasets in repair run $EVIDENCE_RUN. Parent, candidate and sealed evaluation digests were verified. **Nothing is auto-promoted.** The active pointer changes only if a person reviews and merges this PR. Candidate digest: $EXPECTED_SHA."
           echo "Manual review PR opened. Repository main was NOT directly modified."
