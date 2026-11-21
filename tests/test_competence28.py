@@ -80,6 +80,26 @@ class CompetenceTreeTests(unittest.TestCase):
         self.assertEqual(competence28.prediction(x,None),x["parent"])
         self.assertTrue(0<=competence28.trust(x,policy)<=1)
 
+    def test_observable_curvature_veto_not_oracle_regime(self):
+        # Moderate angular drift, but relatively low acceleration, can be
+        # treated as a risk region for harming previously learned turning.
+        turning={"features":[1.,.5,.06,.30,1.,.5,.1,0.,0.,0.,.2],
+                 "parent":[0.,0.],"adapter":[1.,0.],"truth":[0.,0.],
+                 "regime":"turning"}
+        swirl=copy.deepcopy(turning)
+        swirl["features"][2]=.7
+        swirl["features"][3]=.9
+        swirl["regime"]="swirl"
+        policy={"kind":"curvature_risk","low":.10,"high":.65,
+                "risk_threshold":2.0,"veto_trust":0.,"scale":1.}
+        self.assertEqual(competence28.trust(turning,policy),0.)
+        self.assertEqual(competence28.trust(swirl,policy),1.)
+        modified=copy.deepcopy(turning)
+        modified["regime"]="new-hidden-family"
+        modified["truth"]=[-1e6,1e6]
+        self.assertEqual(competence28.prediction(turning,policy),
+                         competence28.prediction(modified,policy))
+
     def test_previous_checkpoint_and_adapter_untouched(self):
         self.assertEqual(phase24.restore_memory(self.parent_file),self.parent)
         self.assertEqual(mesh.load(self.adapter_file),self.adapter)
