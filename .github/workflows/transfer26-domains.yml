@@ -218,7 +218,6 @@ jobs:
           python - <<'PY'
           from neural_mesh import mesh
           r = mesh.load("evidence/evaluation.json")
-          groups = {x["category"]:x for x in r["per_dataset"]}
           s = r["summary"]
           assert s["id"]["relative_change"] < 0, "STOP: familiar motion regressed"
           assert s["known"]["relative_change"] <= -0.10, "STOP: insufficient newly learned improvement"
@@ -227,8 +226,8 @@ jobs:
               assert s[kind]["seed_wins"] >= 2, f"STOP: {kind} seed replication failed"
           id_rows = [x for x in r["per_dataset"] if x["category"]=="id"]
           for family in ("linear","turning"):
-              base = sum(row["parent_regimes"][family]["none"] for row in id_rows)/len(id_rows)
-              improved = sum(row["candidate_regimes"][family]["none"] for row in id_rows)/len(id_rows)
+              base = sum(row["parent"]["regimes"][family] for row in id_rows)/len(id_rows)
+              improved = sum(row["adapter"]["regimes"][family] for row in id_rows)/len(id_rows)
               assert improved <= base, f"STOP: prior {family} skill regressed"
           print("SCIENTIFIC_ACCEPTED_FOR_REVIEW_ONLY")
           PY
