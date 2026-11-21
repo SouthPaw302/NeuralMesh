@@ -137,6 +137,26 @@ class SafetyRouterTests(unittest.TestCase):
                         self.val_known/"public.json",self.val_known/"targets.json",
                         self.root/"unsafe")
 
+    def test_train_cli_dispatch_does_not_shadow_trainer(self):
+        import sys
+        argv=["python -m neural_mesh.safety27","train",
+              "--parent",str(self.parent_path),
+              "--adapter",str(self.adapter_path),
+              "--id-public",str(self.train/"public.json"),
+              "--id-labels",str(self.train/"trainval-labels.json"),
+              "--known-train-public",str(self.cal_known/"public.json"),
+              "--known-train-labels",str(self.cal_known/"targets.json"),
+              "--known-val-public",str(self.val_known/"public.json"),
+              "--known-val-labels",str(self.val_known/"targets.json"),
+              "--out",str(self.root/"cli")]
+        result={"validation_pass":False,"selected_id_validation":{"mse":.2},
+                "selected_known_validation":{"mse":.3},
+                "safety_sha256":"a"*64}
+        with patch.object(sys,"argv",argv),patch.object(
+                safety27,"train",return_value=result) as trainer:
+            safety27.main()
+            trainer.assert_called_once()
+
     def test_tampered_adapter_identity_is_rejected(self):
         forged=copy.deepcopy(self.adapter)
         forged["payload"]["parent_sha256"]="0"*64
